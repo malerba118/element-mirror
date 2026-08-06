@@ -1,4 +1,4 @@
-import { screenshot } from '@renoun/screenshot'
+import { screenshot } from '@screenshot'
 
 /**
  * Shared capture scheduling for every mirror on the page.

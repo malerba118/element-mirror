@@ -4,16 +4,16 @@ import puppeteer from 'puppeteer-core'
 /**
  * Whether a CSS-animated svg still moves in a capture.
  *
- * The patch keeps rasterised svgs keyed by the markup they came from, and a
- * spinner's rotation lives in the animation engine rather than in any attribute,
- * so a cache could freeze it. Each case is captured at 30fps by both the patched
- * and the pristine library: if the patched one is still while the pristine one
- * moves, the cache broke it, and if both are still, the library never handled it.
+ * `vendor/screenshot` keeps rasterised svgs keyed by the markup they came from,
+ * and a spinner's rotation lives in the animation engine rather than in any
+ * attribute, so a cache could freeze it. Each case is captured at 30fps by both
+ * the vendored copy and the published one it forked from: if the vendored one is
+ * still while the published one moves, the cache broke it, and if both are
+ * still, the library never handled it.
  *
- * The pristine copy is not kept in the repo. To recreate it:
+ * Build the vendored copy first, from the repo root:
  *
- *   cp ../node_modules/@renoun/screenshot/dist/index.js renoun-pristine.js
- *   patch -R renoun-pristine.js < ../patches/@renoun+screenshot+0.3.3.patch
+ *   npm run screenshot:build
  */
 
 const CHROME =
@@ -57,8 +57,8 @@ await page.evaluate(() => {
 await wait(1200)
 
 for (const [name, path] of Object.entries({
-  patched: '../node_modules/@renoun/screenshot/dist/index.js',
-  pristine: 'renoun-pristine.js',
+  vendored: '../vendor/screenshot/dist/index.js',
+  pristine: 'node_modules/@renoun/screenshot/dist/index.js',
 })) {
   await page.evaluate(
     async ({ name, source }) => {
@@ -135,19 +135,19 @@ const results = await page.evaluate(async () => {
     return seen.map((set) => set.size)
   }
 
-  return { patched: await run('patched'), pristine: await run('pristine') }
+  return { vendored: await run('vendored'), pristine: await run('pristine') }
 })
 
 const labels = Object.keys(CASES)
 console.log('distinct renderings across 24 captures at 30fps\n')
-console.log(`  ${'case'.padEnd(26)} patched  pristine`)
+console.log(`  ${'case'.padEnd(26)} vendored  pristine`)
 labels.forEach((label, index) => {
-  const patched = results.patched[index]
+  const vendored = results.vendored[index]
   const pristine = results.pristine[index]
   const verdict =
-    patched > 2 ? '' : pristine > 2 ? '  <- the cache froze it' : '  <- neither renders it'
+    vendored > 2 ? '' : pristine > 2 ? '  <- the cache froze it' : '  <- neither renders it'
   console.log(
-    `  ${label.padEnd(26)} ${String(patched).padStart(7)}  ${String(pristine).padStart(8)}${verdict}`
+    `  ${label.padEnd(26)} ${String(vendored).padStart(8)}  ${String(pristine).padStart(8)}${verdict}`
   )
 })
 

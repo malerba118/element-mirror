@@ -20,6 +20,12 @@ node_modules/
 # production
 /build
 
+# vendored screenshot build, only needed by the perf harness
+/vendor/screenshot/dist
+
+# side-by-side comparisons written by a failing vendored screenshot test
+/vendor/screenshot/src/__failures__
+
 # misc
 .DS_Store
 *.pem

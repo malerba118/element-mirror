@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Vendored upstream source, kept diffable against it rather than lint-clean here.
+    "vendor/**",
   ]),
 ]);
 

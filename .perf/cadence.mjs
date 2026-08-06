@@ -54,7 +54,7 @@ await wait(1500)
 
 for (const [name, path] of Object.entries({
   snap: 'node_modules/@zumer/snapdom/dist/snapdom.mjs',
-  renoun: '../node_modules/@renoun/screenshot/dist/index.js',
+  renoun: '../vendor/screenshot/dist/index.js',
 })) {
   await page.evaluate(
     async ({ name, source }) => {

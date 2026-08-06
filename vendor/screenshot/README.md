@@ -1,0 +1,216 @@
+# @renoun/screenshot
+
+A client-side library for rendering HTML elements to canvas. Captures DOM elements with full CSS support including gradients, transforms, shadows, filters, and more.
+
+```ts
+import { screenshot } from '@renoun/screenshot'
+
+const canvas = await screenshot('body')
+```
+
+## Installation
+
+```bash
+npm install @renoun/screenshot
+```
+
+## Features
+
+- CSS gradients (linear, radial, conic)
+- Box shadows and text shadows
+- Border radius and borders
+- CSS transforms including 3D with perspective
+- Backdrop filters
+- Clip paths
+- CSS masks
+- Text decorations
+- Form controls
+- SVG elements
+- Fixed position elements
+- High-DPI rendering
+- Ignore elements via a configurable selector
+
+## Usage
+
+### Convenience Methods
+
+The simplest way to capture screenshots:
+
+```ts
+import { screenshot } from '@renoun/screenshot'
+
+// Render to canvas
+const canvas = await screenshot.canvas(element, { scale: 2 })
+
+// Render and encode to Blob
+const blob = await screenshot.blob(element, {
+  format: 'jpeg',
+  quality: 0.92,
+})
+
+// Render and create an object URL (for <img src>)
+const url = await screenshot.url(element, { format: 'png' })
+// Revoke when done
+URL.revokeObjectURL(url)
+```
+
+### Handle Pattern
+
+For advanced use cases where you want to render once and encode multiple ways:
+
+```ts
+import { screenshot } from '@renoun/screenshot'
+
+const shot = screenshot(element, {
+  includeFixed: 'intersecting',
+  scale: window.devicePixelRatio,
+})
+
+// Reuse the same render for multiple encodings
+const canvas = await shot.canvas()
+const pngBlob = await shot.blob({ format: 'png' })
+const webpUrl = await shot.url({ format: 'webp', quality: 0.9 })
+```
+
+### CSS Selector Support
+
+You can pass a CSS selector instead of an element:
+
+```ts
+const blob = await screenshot.blob('#my-element', { format: 'png' })
+```
+
+### UI Preview Pattern
+
+When updating previews in a UI, remember to revoke old URLs:
+
+```ts
+let lastUrl: string | null = null
+
+async function updatePreview() {
+  if (lastUrl) URL.revokeObjectURL(lastUrl)
+  lastUrl = await screenshot.url(element, { format: 'png' })
+  img.src = lastUrl
+}
+```
+
+### Ignoring Elements
+
+To skip elements from the rendered output, add the `data-screenshot-ignore` attribute:
+
+```html
+<button data-screenshot-ignore>Download</button>
+```
+
+You can also customize the ignore selector via options:
+
+```ts
+await screenshot(element, { ignoreSelector: 'input' })
+```
+
+## API
+
+### `screenshot(target, options?)`
+
+Creates a `ScreenshotTask` that renders the element once and provides methods to access the result in different formats.
+
+**Returns:** `ScreenshotTask` - A promise-like object with additional methods.
+
+### `screenshot.canvas(target, options?)`
+
+One-shot method to render directly to a canvas.
+
+**Returns:** `Promise<HTMLCanvasElement>`
+
+### `screenshot.blob(target, options?)`
+
+One-shot method to render and encode to a Blob.
+
+**Returns:** `Promise<Blob>`
+
+### `screenshot.url(target, options?)`
+
+One-shot method to render and create an object URL.
+
+**Returns:** `Promise<string>` - Remember to call `URL.revokeObjectURL()` when done.
+
+## Types
+
+```typescript
+type ImageFormat = 'png' | 'jpeg' | 'webp'
+
+interface RenderOptions {
+  /** Canvas background color. Set to `null` for transparent. */
+  backgroundColor?: string | null
+
+  /** Optional existing canvas to render into. */
+  canvas?: HTMLCanvasElement
+
+  /** Rendering scale factor. Defaults to `window.devicePixelRatio`. */
+  scale?: number
+
+  /** Crop origin X (CSS pixels) relative to the element. */
+  x?: number
+
+  /** Crop origin Y (CSS pixels) relative to the element. */
+  y?: number
+
+  /** Output width in CSS pixels. Defaults to element width. */
+  width?: number
+
+  /** Output height in CSS pixels. Defaults to element height. */
+  height?: number
+
+  /**
+   * Controls how `position: fixed` elements are handled.
+   * - `none` – ignore fixed elements outside the target.
+   * - `intersecting` – include fixed elements that intersect the capture rect.
+   * - `all` – include all fixed elements in the viewport.
+   */
+  includeFixed?: 'none' | 'intersecting' | 'all'
+
+  /**
+   * CSS selector used to skip elements from rendering.
+   * Defaults to `[data-screenshot-ignore]`. Set to `null` or an empty string
+   * to disable selector-based skipping.
+   */
+  ignoreSelector?: string | null
+}
+
+interface EncodeOptions {
+  /** Image format. Defaults to 'png'. */
+  format?: ImageFormat
+
+  /** Quality for jpeg/webp (0-1). Defaults to 0.92. */
+  quality?: number
+}
+
+type ScreenshotOptions = RenderOptions & EncodeOptions
+
+interface ScreenshotTask extends Promise<HTMLCanvasElement> {
+  canvas(): Promise<HTMLCanvasElement>
+  blob(options?: EncodeOptions): Promise<Blob>
+  url(options?: EncodeOptions): Promise<string>
+}
+```
+
+## Canvas Security
+
+Inline `<canvas>` elements are captured at screenshot start so animated and WebGL
+content stays stable during async resource preparation.
+
+If a source canvas has been tainted by cross-origin image data or WebGL textures,
+the browser will refuse to copy its pixels. In that case `@renoun/screenshot`
+renders the element box with a visible placeholder and logs a warning instead of
+silently leaving the area blank.
+
+To keep canvas content readable:
+
+- Load source images with CORS enabled.
+- Set `crossOrigin="anonymous"` on images before assigning `src`.
+- Ensure the image response includes a matching `Access-Control-Allow-Origin`
+  header before drawing it into a canvas or uploading it into WebGL.
+
+## License
+
+[MIT](/LICENSE.md) © [souporserious](https://souporserious.com/)

@@ -19,7 +19,9 @@ const CHROME =
   '/Users/frostin/.cache/puppeteer/chrome/mac_arm-138.0.7204.157/chrome-mac-arm64/Google Chrome for Testing.app/Contents/MacOS/Google Chrome for Testing'
 
 const MODULES = {
-  renoun: '../node_modules/@renoun/screenshot/dist/index.js',
+  // The vendored fork this demo actually captures with, built by
+  // `npm run screenshot:build` from the repo root.
+  renoun: '../vendor/screenshot/dist/index.js',
   snapdom: 'node_modules/@zumer/snapdom/dist/snapdom.mjs',
   modern: 'node_modules/modern-screenshot/dist/index.mjs',
 }

@@ -169,7 +169,7 @@ export default function Home() {
 
       <footer className="border-t">
         <div className="mx-auto w-full max-w-6xl px-6 py-6 text-xs text-muted-foreground">
-          Captures are produced by{' '}
+          Captures are produced by a vendored fork of{' '}
           <a
             href="https://github.com/souporserious/renoun"
             className="underline underline-offset-4 hover:text-foreground"

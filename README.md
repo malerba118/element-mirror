@@ -15,7 +15,9 @@ const cardRef = useRef<HTMLDivElement>(null)
 
 Captures come from [`@renoun/screenshot`](https://github.com/souporserious/renoun),
 which paints the element's subtree straight into a Canvas2D context by reading
-live computed styles.
+live computed styles. Its source is vendored in `vendor/screenshot` rather than
+installed, so what it renders badly can be fixed here; `vendor/README.md`
+records where the copy came from and what has changed.
 
 ## Running the demo
 
@@ -232,19 +234,25 @@ The player card is six lucide icons, which cost 37ms a capture against 3ms for
 everything else in it put together — enough that backpressure held the whole card
 to 2.5fps.
 
-`.perf/svg.mjs` prices each step. `patches/@renoun+screenshot+0.3.3.patch` fixes
+`.perf/svg.mjs` prices each step. The vendored copy in `vendor/screenshot` fixes
 it, by serialising the page's CSS once per distinct set of stylesheets rather than
 once per icon, and keeping rasterised svgs keyed by the markup they came from. An
 icon that has not changed then costs nothing to redraw, and the card is back to
-4.4ms a capture and a held 30fps. `patch-package` reapplies it on install, so a
-version bump of `@renoun/screenshot` will fail the install until the patch is
-regenerated — the fix belongs upstream.
+4.4ms a capture and a held 30fps. That fix belongs upstream, which is why the
+copy is kept as a diffable fork of one released tag.
 
-A second thing to know when building a source: a child that overflows a parent
-with a `border-radius` is clipped to it, though CSS only clips when the parent
-asks for `overflow: hidden`. `.perf/overflow.mjs` reproduces it. The player
-card's progress knob is a circle standing proud of a 4px rounded track, so it was
-shaved into the bar until it was moved out to a square-cornered parent.
+Rendering fidelity is the other thing the vendored copy is for. A child that
+overflows a parent with a `border-radius` used to be clipped to it, though CSS
+only clips when the parent asks for `overflow: hidden`: the player card's
+progress knob is a circle standing proud of a 4px rounded track, and it was
+shaved into the bar until the knob was moved out to a square-cornered parent.
+That, a CSS transform being dropped from an inline `<svg>`, text shadows landing
+a quarter of the distance from their text, `text-overflow: ellipsis` being
+painted as a glyph cut in half, and a range input's track coming out a single
+solid bar are all fixed in `vendor/screenshot`, each with a test;
+`vendor/README.md` explains what each one was. `.perf/overflow.mjs` is how the
+clipping one was found: it captures the knob against a rounded track and a
+square one, and reports how much of the overflowing part survived.
 
 One loop in `src/lib/mirror-capture.ts` drives every mirror on the page. Each
 cycle resolves each mirror's source and buckets the mirrors by the element they
