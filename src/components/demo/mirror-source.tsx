@@ -22,9 +22,10 @@ interface MirrorSourceProps {
 }
 
 /**
- * The element every demo on the page mirrors. It deliberately combines the
- * things that are hard to capture: a gradient, a CSS animation, live text,
- * and real form controls holding React state.
+ * The element the supporting demos mirror, where what is being shown is the
+ * mirroring rather than the source. It deliberately combines the things that are
+ * hard to capture: a gradient, a CSS animation, live text, and real form
+ * controls holding React state. The main example uses `PlayerSource` instead.
  */
 export const MirrorSource = React.forwardRef<HTMLDivElement, MirrorSourceProps>(
   function MirrorSource(

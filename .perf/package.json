@@ -3,6 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
+    "@zumer/snapdom": "^2.23.2",
+    "modern-screenshot": "^4.7.0",
     "puppeteer-core": "^25.5.0"
   }
 }

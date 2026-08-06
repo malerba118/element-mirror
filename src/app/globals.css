@@ -144,6 +144,23 @@
   animation: demo-sweep 2.2s ease-in-out infinite;
 }
 
+/* The equalizer in the player source. Scaled rather than resized, and driven
+   entirely by CSS, so the whole animation is invisible to a MutationObserver:
+   the source is only known to be moving because it has a running animation. */
+@keyframes demo-equalize {
+  0%,
+  100% {
+    transform: scaleY(0.25);
+  }
+  50% {
+    transform: scaleY(1);
+  }
+}
+
+.demo-equalize {
+  animation: demo-equalize 900ms ease-in-out infinite;
+}
+
 @keyframes demo-pulse {
   0%,
   100% {

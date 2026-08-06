@@ -222,6 +222,30 @@ Measured on this demo, a small card costs a few milliseconds per capture while
 drawing the resulting bitmap costs about a thousandth of that. Everything below
 follows from that gap.
 
+One node type is worth knowing about: an inline `<svg>` costs several
+milliseconds on its own, far out of proportion to the handful of elements it
+contains. `@renoun/screenshot` rasterises each one by cloning it, inlining every
+rule of every stylesheet on the page into the clone, serialising that and
+decoding it as an image. On this demo that is 90KB of CSS per icon per frame, and
+the clone has had its classes stripped by then so almost none of it can apply.
+The player card is six lucide icons, which cost 37ms a capture against 3ms for
+everything else in it put together — enough that backpressure held the whole card
+to 2.5fps.
+
+`.perf/svg.mjs` prices each step. `patches/@renoun+screenshot+0.3.3.patch` fixes
+it, by serialising the page's CSS once per distinct set of stylesheets rather than
+once per icon, and keeping rasterised svgs keyed by the markup they came from. An
+icon that has not changed then costs nothing to redraw, and the card is back to
+4.4ms a capture and a held 30fps. `patch-package` reapplies it on install, so a
+version bump of `@renoun/screenshot` will fail the install until the patch is
+regenerated — the fix belongs upstream.
+
+A second thing to know when building a source: a child that overflows a parent
+with a `border-radius` is clipped to it, though CSS only clips when the parent
+asks for `overflow: hidden`. `.perf/overflow.mjs` reproduces it. The player
+card's progress knob is a circle standing proud of a 4px rounded track, so it was
+shaved into the bar until it was moved out to a square-cornered parent.
+
 One loop in `src/lib/mirror-capture.ts` drives every mirror on the page. Each
 cycle resolves each mirror's source and buckets the mirrors by the element they
 landed on, and each bucket is serviced once:

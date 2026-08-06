@@ -1,0 +1,125 @@
+diff --git a/node_modules/@renoun/screenshot/dist/index.js b/node_modules/@renoun/screenshot/dist/index.js
+index 76471e2..662f8dd 100644
+--- a/node_modules/@renoun/screenshot/dist/index.js
++++ b/node_modules/@renoun/screenshot/dist/index.js
+@@ -3658,6 +3658,58 @@ function toRoman(index, upper) {
+     }
+     return upper ? result.toUpperCase() : result;
+ }
++/**
++ * The page's CSS, serialised once per distinct set of stylesheets.
++ *
++ * Every svg on the page is rasterised by inlining this into a clone of it, and
++ * serialising every rule of every sheet is milliseconds of work on a page with a
++ * utility framework. Fingerprinted by rule counts, which is cheap to read, so a
++ * stylesheet arriving or changing still invalidates it.
++ */
++let __cssCache = { fingerprint: null, text: '' };
++function __documentCssText() {
++    let fingerprint = '';
++    let sheets = [];
++    try {
++        sheets = Array.from(document.styleSheets);
++    }
++    catch (error) {
++        return __cssCache.text;
++    }
++    for (const sheet of sheets) {
++        try {
++            fingerprint += sheet.cssRules.length + ',';
++        }
++        catch (error) {
++            fingerprint += 'x,';
++        }
++    }
++    if (fingerprint === __cssCache.fingerprint)
++        return __cssCache.text;
++    let cssText = '';
++    for (const sheet of sheets) {
++        try {
++            for (const rule of Array.from(sheet.cssRules)) {
++                cssText += rule.cssText + '\n';
++            }
++        }
++        catch (error) {
++            // Ignore errors from cross-origin stylesheets
++        }
++    }
++    __cssCache = { fingerprint, text: cssText };
++    return cssText;
++}
++
++/**
++ * Rasterised svgs, keyed by the markup they were rasterised from.
++ *
++ * An svg that has not changed decodes to the same bitmap, and decoding is the
++ * rest of the cost. A mirror capturing the same icons thirty times a second pays
++ * for them once.
++ */
++const __svgCache = new Map();
++
+ async function renderSvgElement(element, context, rect, env) {
+     const scale = env.scale ?? 1;
+     // Target dimensions in Device Pixels
+@@ -3730,23 +3782,7 @@ async function renderSvgElement(element, context, rect, env) {
+     }
+     // Now that we've finished the node-to-node copy, we can safely modify the clone's tree
+     const styleElement = document.createElement('style');
+-    let cssText = '';
+-    try {
+-        for (const sheet of Array.from(document.styleSheets)) {
+-            try {
+-                for (const rule of Array.from(sheet.cssRules)) {
+-                    cssText += rule.cssText + '\n';
+-                }
+-            }
+-            catch (error) {
+-                // Ignore errors from cross-origin stylesheets
+-            }
+-        }
+-    }
+-    catch (error) {
+-        // Ignore errors from accessing document.styleSheets
+-    }
+-    styleElement.textContent = cssText;
++    styleElement.textContent = __documentCssText();
+     clone.insertBefore(styleElement, clone.firstChild);
+     // Final Attributes
+     clone.setAttribute('width', String(targetWidth));
+@@ -3771,17 +3807,26 @@ async function renderSvgElement(element, context, rect, env) {
+     // Render
+     const serializer = new XMLSerializer();
+     const svgText = serializer.serializeToString(clone);
+-    const blob = new Blob([svgText], { type: 'image/svg+xml' });
+-    const url = URL.createObjectURL(blob);
+-    try {
+-        const resource = await getImage(url);
+-        if (!resource)
+-            return;
+-        context.drawImage(resource.image, 0, 0, targetWidth, targetHeight, rect.left, rect.top, rect.width, rect.height);
+-    }
+-    finally {
+-        URL.revokeObjectURL(url);
++    let resource = __svgCache.get(svgText);
++    if (!resource) {
++        const blob = new Blob([svgText], { type: 'image/svg+xml' });
++        const url = URL.createObjectURL(blob);
++        try {
++            resource = await getImage(url);
++        }
++        finally {
++            // The image holds its decoded bitmap, so the url is done with.
++            URL.revokeObjectURL(url);
++        }
++        if (resource) {
++            if (__svgCache.size > 256)
++                __svgCache.clear();
++            __svgCache.set(svgText, resource);
++        }
+     }
++    if (!resource)
++        return;
++    context.drawImage(resource.image, 0, 0, targetWidth, targetHeight, rect.left, rect.top, rect.width, rect.height);
+ }
+ /**
+  * Detect if a button element has default browser styling (not custom styled).

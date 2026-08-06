@@ -3,7 +3,7 @@
 import * as React from 'react'
 
 import { ElementMirror } from '@/components/element-mirror'
-import { MirrorSource } from '@/components/demo/mirror-source'
+import { PlayerSource } from '@/components/demo/player-source'
 import { CodeBlock } from '@/components/demo/section'
 import { Badge } from '@/components/ui/badge'
 import {
@@ -102,8 +102,8 @@ export function Playground() {
               </Badge>
             </CardAction>
           </CardHeader>
-          <CardContent className="flex justify-center py-2">
-            <MirrorSource ref={sourceRef} label="sourceRef" />
+          <CardContent className="flex min-h-56 items-center justify-center py-2">
+            <PlayerSource ref={sourceRef} />
           </CardContent>
         </Card>
 
@@ -246,8 +246,8 @@ export function Playground() {
                 <Label className="w-fit">objectFit</Label>
               </TooltipTrigger>
               <TooltipContent side="right">
-                Only has an effect once the canvas has both a width and a
-                height to fill.
+                Only has an effect once the canvas has both a width and a height
+                to fill.
               </TooltipContent>
             </Tooltip>
             <Select
