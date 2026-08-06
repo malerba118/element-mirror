@@ -1,0 +1,8 @@
+{
+  "name": "element-mirror-perf",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "puppeteer-core": "^25.5.0"
+  }
+}

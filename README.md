@@ -35,13 +35,13 @@ PORT=3000 npm run dev
 | Prop | Type | Default | Notes |
 | --- | --- | --- | --- |
 | `source` | `Element \| RefObject<Element \| null> \| string` | — | The element to mirror, as an element, a ref, or a CSS selector. |
-| `fps` | `number` | `12` | Maximum captures per second. |
+| `fps` | `number` | `12` | Maximum captures per second, up to the display refresh rate. |
+| `delay` | `number` | `0` | Milliseconds behind the source to run. |
 | `pixelRatio` | `number` | `devicePixelRatio` | Bitmap pixels captured per CSS pixel. |
 | `objectFit` | `ObjectFit` | `'fill'` | Applies once the canvas has both a width and a height. |
 | `objectPosition` | `string` | `'center'` | Alignment when `objectFit` crops or letterboxes. |
-| `capture` | `'auto' \| 'always' \| 'once'` | `'auto'` | `auto` skips captures while the source is unchanged. |
 | `background` | `string \| null` | `null` | Fill behind the element. `null` keeps transparency. |
-| `paused` | `boolean` | `false` | Stop capturing and hold the last frame. |
+| `paused` | `boolean` | `false` | Stop capturing and hold a frame. Paused before it has one, a mirror captures a single frame to hold. |
 
 Anything else is forwarded to the canvas, and `ref` points at the canvas.
 
@@ -60,6 +60,36 @@ that is swapped for another element all work without remounting the mirror.
 
 Resolution decides sharing too: mirrors are grouped by the element they land on,
 so a ref and a selector naming the same node still share a single capture.
+
+### Running behind
+
+`delay` shows the source as it was that many milliseconds ago, which is what
+makes trails and echoes possible:
+
+```tsx
+{[0, 250, 500, 750].map((delay) => (
+  <ElementMirror key={delay} source="#card" fps={20} delay={delay} />
+))}
+```
+
+Captures accumulate in a per-source timeline, and each mirror is drawn the
+newest frame taken at or before its own moment. Mirrors of one element share
+that history, so the four above cost the same captures as one, and delay is
+paid for in memory rather than CPU. History is kept only as far back as the
+furthest-behind mirror can still reach, under a ceiling on total pixels.
+
+Two consequences worth knowing. Resolution is bounded by `fps`, so a mirror runs
+between `delay` and `delay + 1000 / fps` behind in practice; measured against a
+source whose position encodes the time, mirrors asked for 0, 250, 500 and 750ms
+came in at 35, 300, 560 and 825ms at 20fps. And a mirror reaching further back
+than the history goes shows the oldest frame it has, so a trail starts level
+with the source and fans out rather than starting blank.
+
+Skipping captures does not punch holes in the past. A cycle is only skipped when
+the source is unchanged, so the frame before a gap still depicts every moment
+inside it, and a still source correctly serves every delay from a single frame.
+The same measurement against a source that changes only every 800ms returns the
+same lags.
 
 ### Sizing
 
@@ -201,14 +231,37 @@ landed on, and each bucket is serviced once:
   They also stay frame-consistent, which independent loops did not.
 - **The fastest subscriber sets the pace.** A bucket runs at `max(fps)` rather
   than the sum, and slower mirrors sample every nth frame.
-- **Clean sources are not captured.** A `MutationObserver` and `ResizeObserver`
-  watch the subtree, and a cycle with nothing to do is skipped. Running CSS
-  animations, other canvases, and attribute changes on `<html>`/`<body>` (theme
-  switching, for instance) all count as changed, so live content keeps updating;
-  `capture="always"` opts out of the check entirely. Video is tracked by
-  `currentTime`, which covers both playback and seeking while paused, and lets a
-  paused video's mirror fall idle. A mirror that has not painted yet always
-  captures, so joining a static source still gives it a first frame.
+- **Clean sources are not captured.** A cycle with nothing to redraw is skipped,
+  which is the difference between a still source costing milliseconds a second
+  and costing nothing. There is no prop to force a capture, so deciding that
+  nothing changed has to be right. Three mechanisms decide it together:
+  - _Observers_, for changes to the tree. A `MutationObserver` and a
+    `ResizeObserver` watch the subtree's children, attributes, text and size,
+    and attribute changes on `<html>`/`<body>` catch theme switching.
+  - _Polling_, for content that repaints under its own power: running CSS
+    animations and transitions, other canvases, and video. Video is tracked by
+    `currentTime`, which covers playback and seeking while paused, and lets a
+    paused video's mirror fall idle.
+  - _Listeners_, for changes that leave no trace in the DOM at all. A typed
+    value lives on the property rather than the attribute, and a scroll offset
+    is not DOM state in the first place, so neither reaches an observer. The
+    source gets capture-phase listeners for `input`, `change`, `scroll`,
+    `pointerover`/`pointerout` (`:hover`), `focusin`/`focusout` (focus rings)
+    and `load` (images arriving late), plus a page-level hook for webfonts
+    swapping in.
+
+  None of that is provably exhaustive, so a source is re-captured every second
+  regardless. Undercapturing is the worse failure: a needless capture costs a
+  few milliseconds, while a change nobody noticed leaves every mirror of that
+  source wrong until something else happens to it. The insurance costs about one
+  capture per second per still source, and a mirror that has not painted yet
+  always captures, so joining a static source still gives it a first frame.
+- **Delayed mirrors cost history, not captures.** Captures accumulate in a
+  per-source timeline and each mirror is drawn the frame matching its own
+  `delay`, which is why a trail of eight ghosts is still one capture per frame.
+  Frames are recycled through a pool and captured straight into the next slot,
+  so history costs no copying, and the timeline is trimmed to what the
+  furthest-behind mirror can still reach.
 - **Videos that cannot draw are waited for.** A seeking or buffering video drops
   below `HAVE_CURRENT_DATA`, and capturing then paints a hole where the video
   sits. Those captures are skipped, so mirrors hold their last frame exactly as
@@ -216,7 +269,31 @@ landed on, and each bucket is serviced once:
 - **The loop backs off.** Each capture is timed, and the element's next capture
   is delayed so capturing stays under `CAPTURE_DUTY_CYCLE` (20%) of wall-clock
   time. An expensive source degrades to a lower frame rate instead of saturating
-  the main thread.
+  the main thread. The judgement runs on a rolling average of the last few
+  captures rather than the last one, because a capture is timed across an `await`
+  and so measures whatever else the main thread did meanwhile. Dropping a frame
+  from a rate the source can sustain is worse than answering a real slowdown a
+  few frames late.
+
+### Rate
+
+A requested rate is what arrives. Two things in the loop are there for that.
+
+Each frame is booked from the time the previous one was **due**, not from the
+time its capture finished. Anchoring on completion folds the cost of capturing
+into the period, so a source taking 4ms would serve a requested 30fps at 27, and
+any variation in that cost would surface as jitter in a rate that was supposed to
+be fixed.
+
+The loop then wakes on displayed frames rather than on a timer, and a frame due
+before the next one is due now. Timers fire on a clock of their own, and near the
+refresh rate that leaves a capture finishing just after a paint went out and
+waiting for the following one — two frames one refresh apart, then one three
+refreshes later. Evenly captured, unevenly seen. Aligning to the display makes a
+rate below the refresh rate look steady rather than merely be steady, and it is
+why the refresh rate is the ceiling: rates that divide into it (30 and 60 on a
+60Hz display) land evenly, and rates that do not are spaced as evenly as whole
+frames allow.
 
 Mirrors also stop capturing while scrolled out of view (via
 `IntersectionObserver`) or while the tab is hidden, captures never overlap, and

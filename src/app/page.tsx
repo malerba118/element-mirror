@@ -1,4 +1,5 @@
 import { CaptureStatsBadge } from '@/components/demo/capture-stats'
+import { DelayShowcase } from '@/components/demo/delay-showcase'
 import { DragGhostShowcase } from '@/components/demo/drag-ghost-showcase'
 import { FrameRateShowcase } from '@/components/demo/frame-rate-showcase'
 import { Playground } from '@/components/demo/playground'
@@ -113,6 +114,22 @@ export default function Home() {
         </Section>
 
         <Section
+          title="Mirrors that run behind"
+          description={
+            <>
+              <Token>delay</Token> shows the source as it was some milliseconds
+              ago. Mirrors of one element share a single capture history, so a
+              trail of them costs the same captures as one, and each is drawn
+              whichever frame has aged into its own past. Skipping captures on a
+              still source costs nothing here: a frame stands for every moment
+              until the next one, so a gap in the history is not a gap in time.
+            </>
+          }
+        >
+          <DelayShowcase />
+        </Section>
+
+        <Section
           title="Frame rate is the cost dial"
           description={
             <>
@@ -131,11 +148,11 @@ export default function Home() {
           title="One frame and stop"
           description={
             <>
-              <Token>capture=&quot;once&quot;</Token> paints a single frame and
-              retires, which makes a cheap before-and-after snapshot of a
-              component you are about to change. <Token>paused</Token> does the
-              same to a running mirror, holding its last frame until you let it
-              go again.
+              <Token>paused</Token> holds a running mirror on its last frame
+              until you let it go again. A mirror that has no frame yet takes
+              one first, so mounting it paused paints a single frame and
+              retires, the way a video shows its poster. That makes a cheap
+              before-and-after snapshot of a component you are about to change.
             </>
           }
         >

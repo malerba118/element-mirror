@@ -1,0 +1,113 @@
+{
+  "compilerOptions": {
+    "alwaysStrict": true,
+    "composite": true,
+    "declaration": true,
+    "esModuleInterop": true,
+    "incremental": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "types": [
+      "node"
+    ],
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitAny": true,
+    "noImplicitOverride": true,
+    "noImplicitReturns": true,
+    "noImplicitThis": true,
+    "noPropertyAccessFromIndexSignature": true,
+    "noUncheckedIndexedAccess": true,
+    "noUnusedLocals": false,
+    "noUnusedParameters": false,
+    "resolveJsonModule": true,
+    "sourceMap": true,
+    "strict": true,
+    "strictBindCallApply": true,
+    "strictFunctionTypes": true,
+    "strictNullChecks": true,
+    "strictPropertyInitialization": true,
+    "target": "es2023",
+    "useUnknownInCatchVariables": true,
+    "outDir": "/home/runner/work/chromium-bidi/chromium-bidi/out/Default/gen/src",
+    "rootDir": "/home/runner/work/chromium-bidi/chromium-bidi/src",
+    "typeRoots": [
+      "/home/runner/work/chromium-bidi/chromium-bidi/node_modules/@types"
+    ],
+    "lib": [
+      "dom",
+      "dom.iterable",
+      "es2023"
+    ],
+    "tsBuildInfoFile": "/home/runner/work/chromium-bidi/chromium-bidi/out/Default/gen/src/bidi_mapper-tsconfig.json.tsbuildinfo"
+  },
+  "files": [
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/BidiMapper.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/BidiNoOpParser.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/BidiParser.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/BidiServer.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/BidiTransport.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/CommandProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/MapperOptions.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/OutgoingMessage.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/bluetooth/BluetoothProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/browser/BrowserProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/browser/ContextConfig.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/browser/ContextConfigStorage.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/browser/UserContextStorage.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/cdp/CdpProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/cdp/CdpTarget.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/cdp/CdpTargetManager.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/context/BrowsingContextImpl.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/context/BrowsingContextProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/context/BrowsingContextStorage.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/context/NavigationTracker.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/digitalCredentials/DigitalCredentialsProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/emulation/EmulationProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/input/ActionDispatcher.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/input/ActionOption.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/input/InputProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/input/InputSource.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/input/InputState.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/input/InputStateManager.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/input/USKeyboardLayout.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/input/keyUtils.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/log/LogManager.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/log/logHelper.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/network/CollectorsStorage.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/network/NetworkProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/network/NetworkRequest.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/network/NetworkStorage.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/network/NetworkUtils.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/permissions/PermissionsProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/script/ChannelProxy.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/script/PreloadScript.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/script/PreloadScriptStorage.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/script/Realm.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/script/RealmStorage.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/script/ScriptProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/script/SharedId.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/script/WindowRealm.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/script/WorkerRealm.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/session/EventManager.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/session/SessionProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/session/SubscriptionManager.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/session/events.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/speculation/SpeculationProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/storage/StorageProcessor.ts",
+    "/home/runner/work/chromium-bidi/chromium-bidi/src/bidiMapper/modules/webExtension/WebExtensionProcessor.ts"
+  ],
+  "references": [
+    {
+      "path": "/home/runner/work/chromium-bidi/chromium-bidi/out/Default/gen/src/utils-tsconfig.json"
+    },
+    {
+      "path": "/home/runner/work/chromium-bidi/chromium-bidi/out/Default/gen/src/cdp-tsconfig.json"
+    },
+    {
+      "path": "/home/runner/work/chromium-bidi/chromium-bidi/out/Default/gen/src/protocol-tsconfig.json"
+    },
+    {
+      "path": "/home/runner/work/chromium-bidi/chromium-bidi/out/Default/gen/src/protocol_parser-tsconfig.json"
+    }
+  ]
+}

@@ -44,7 +44,7 @@ export function SnapshotShowcase() {
           </CardDescription>
           <CardAction>
             <Badge variant="secondary" className="font-mono">
-              capture={'"once"'}
+              paused
             </Badge>
           </CardAction>
         </CardHeader>
@@ -55,7 +55,7 @@ export function SnapshotShowcase() {
               // frame is done until it is asked for another.
               key={take}
               source={`#${SOURCE_ID}`}
-              capture="once"
+              paused
               style={{ width: 300, height: 'auto' }}
               className="block rounded-md ring-1 ring-border"
             />
@@ -69,7 +69,7 @@ export function SnapshotShowcase() {
             Re-capture
           </Button>
           <CodeBlock
-            code={`<ElementMirror source="#${SOURCE_ID}" capture="once" />`}
+            code={`<ElementMirror source="#${SOURCE_ID}" paused />`}
           />
         </CardContent>
       </Card>

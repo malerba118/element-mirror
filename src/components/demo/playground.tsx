@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 
-import { ElementMirror, type ElementMirrorProps } from '@/components/element-mirror'
+import { ElementMirror } from '@/components/element-mirror'
 import { MirrorSource } from '@/components/demo/mirror-source'
 import { CodeBlock } from '@/components/demo/section'
 import { Badge } from '@/components/ui/badge'
@@ -34,22 +34,20 @@ import {
 /** What CSS size the canvas is given, if any. */
 type Layout = 'natural' | 'intrinsic' | 'boxed'
 type Fit = NonNullable<React.CSSProperties['objectFit']>
-type Capture = NonNullable<ElementMirrorProps['capture']>
 
 const FIT_VALUES: Fit[] = ['fill', 'contain', 'cover', 'none', 'scale-down']
 const POSITION_VALUES = ['center', 'top', 'bottom', 'left', 'right']
-const CAPTURE_VALUES: Capture[] = ['auto', 'always', 'once']
 
 export function Playground() {
   const sourceRef = React.useRef<HTMLDivElement>(null)
   const [fps, setFps] = React.useState(12)
+  const [delay, setDelay] = React.useState(0)
   const [pixelRatio, setPixelRatio] = React.useState(2)
   const [layout, setLayout] = React.useState<Layout>('boxed')
   const [width, setWidth] = React.useState(320)
   const [height, setHeight] = React.useState(160)
   const [objectFit, setObjectFit] = React.useState<Fit>('contain')
   const [objectPosition, setObjectPosition] = React.useState('center')
-  const [capture, setCapture] = React.useState<Capture>('auto')
   const [transparent, setTransparent] = React.useState(true)
   const [paused, setPaused] = React.useState(false)
 
@@ -66,11 +64,11 @@ export function Playground() {
       `fps={${fps}}`,
       `pixelRatio={${pixelRatio}}`,
     ]
+    if (delay > 0) props.push(`delay={${delay}}`)
     if (boxed) props.push(`objectFit="${objectFit}"`)
     if (boxed && objectPosition !== 'center') {
       props.push(`objectPosition="${objectPosition}"`)
     }
-    if (capture !== 'auto') props.push(`capture="${capture}"`)
     if (!transparent) props.push('background="#ffffff"')
     if (paused) props.push('paused')
     if (layout === 'intrinsic') {
@@ -80,7 +78,7 @@ export function Playground() {
     return `<ElementMirror\n${props.map((prop) => `  ${prop}`).join('\n')}\n/>`
   }, [
     boxed,
-    capture,
+    delay,
     fps,
     height,
     layout,
@@ -114,11 +112,7 @@ export function Playground() {
             <CardTitle>Mirror</CardTitle>
             <CardAction>
               <Badge variant="secondary" className="font-mono">
-                {paused
-                  ? 'paused'
-                  : capture === 'once'
-                    ? '1 frame'
-                    : `${fps} fps`}
+                {paused ? 'paused' : `${fps} fps`}
               </Badge>
             </CardAction>
           </CardHeader>
@@ -127,10 +121,10 @@ export function Playground() {
               <ElementMirror
                 source={sourceRef}
                 fps={fps}
+                delay={delay}
                 pixelRatio={pixelRatio}
                 objectFit={objectFit}
                 objectPosition={objectPosition}
-                capture={capture}
                 background={transparent ? null : '#ffffff'}
                 paused={paused}
                 style={mirrorStyle}
@@ -153,11 +147,29 @@ export function Playground() {
             <Slider
               id="fps"
               min={1}
-              max={30}
+              max={60}
               step={1}
               value={[fps]}
-              disabled={capture === 'once'}
+              disabled={paused}
               onValueChange={([value]) => setFps(value)}
+            />
+          </div>
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <Label htmlFor="delay">delay</Label>
+              <span className="font-mono text-xs text-muted-foreground">
+                {delay === 0 ? 'live' : `−${delay}ms`}
+              </span>
+            </div>
+            <Slider
+              id="delay"
+              min={0}
+              max={1000}
+              step={50}
+              value={[delay]}
+              disabled={paused}
+              onValueChange={([value]) => setDelay(value)}
             />
           </div>
 
@@ -276,25 +288,6 @@ export function Playground() {
               </SelectTrigger>
               <SelectContent>
                 {POSITION_VALUES.map((value) => (
-                  <SelectItem key={value} value={value}>
-                    {value}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </div>
-
-          <div className="space-y-3">
-            <Label>capture</Label>
-            <Select
-              value={capture}
-              onValueChange={(value) => setCapture(value as Capture)}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {CAPTURE_VALUES.map((value) => (
                   <SelectItem key={value} value={value}>
                     {value}
                   </SelectItem>

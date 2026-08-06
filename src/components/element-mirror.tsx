@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 
-import { subscribeToSource, type CaptureMode } from '@/lib/mirror-capture'
+import { subscribeToSource } from '@/lib/mirror-capture'
 
 export type ElementMirrorSource =
   | Element
@@ -29,9 +29,27 @@ export type ElementMirrorProps = Omit<
    * Mirrors of the same source share captures, and the mirror with
    * the highest fps determines the shared capture rate.
    *
+   * Captures land on displayed frames, so the effective ceiling is the
+   * refresh rate, and a rate that does not divide into it is spaced as
+   * evenly as whole frames allow. An expensive source is held below the
+   * requested rate rather than allowed to saturate the main thread.
+   *
    * @default 12
    */
   fps?: number
+
+  /**
+   * How far behind the source this mirror runs, in milliseconds.
+   *
+   * Mirrors of one source share its capture history, so a trail of
+   * delayed mirrors costs no more captures than a single mirror.
+   *
+   * Resolution is bounded by the capture rate: a delay finer than one
+   * capture interval lands on the nearest captured frame.
+   *
+   * @default 0
+   */
+  delay?: number
 
   /**
    * Number of bitmap pixels captured per CSS pixel.
@@ -63,17 +81,6 @@ export type ElementMirrorProps = Omit<
   objectPosition?: React.CSSProperties['objectPosition']
 
   /**
-   * Determines when captures are produced.
-   *
-   * - auto: skips captures while the source is unchanged
-   * - always: captures continuously up to the configured fps
-   * - once: captures a single frame
-   *
-   * @default 'auto'
-   */
-  capture?: CaptureMode
-
-  /**
    * Paints a background behind the captured element.
    *
    * null preserves transparency.
@@ -84,6 +91,9 @@ export type ElementMirrorProps = Omit<
 
   /**
    * Suspends capturing while preserving the last painted frame.
+   *
+   * A mirror paused before it has a frame still captures one, so it holds a
+   * still of the source rather than nothing.
    *
    * @default false
    */
@@ -133,10 +143,10 @@ export const ElementMirror = React.forwardRef<
   {
     source,
     fps = 12,
+    delay = 0,
     pixelRatio,
     objectFit,
     objectPosition,
-    capture = 'auto',
     background = null,
     paused = false,
     style,
@@ -160,7 +170,12 @@ export const ElementMirror = React.forwardRef<
 
   React.useEffect(() => {
     const canvas = canvasRef.current
-    if (!canvas || paused) return
+    if (!canvas) return
+
+    // Pausing holds whatever is on the canvas, so a mirror that already has a
+    // frame needs nothing further. One that does not still owes the page an
+    // image: a non-positive rate captures a single frame and retires.
+    if (paused && hasFrameRef.current) return
 
     // Assume visible until the observer says otherwise, so the first frame
     // paints without waiting a callback.
@@ -168,9 +183,9 @@ export const ElementMirror = React.forwardRef<
 
     const subscription = subscribeToSource({
       resolve: () => resolveSource(source),
-      fps,
+      fps: paused ? 0 : fps,
+      delay,
       pixelRatio,
-      capture,
       isActive: () => onScreen,
       onFrame(bitmap, sourceWidth, sourceHeight) {
         if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
@@ -210,7 +225,7 @@ export const ElementMirror = React.forwardRef<
       intersection.disconnect()
       subscription.release()
     }
-  }, [source, fps, pixelRatio, capture, paused])
+  }, [source, fps, delay, pixelRatio, paused])
 
   // The intrinsic size has to be settled before the first paint. Left to an
   // ordinary effect, the canvas would lay out once at its default 300x150,

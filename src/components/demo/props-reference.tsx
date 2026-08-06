@@ -13,7 +13,14 @@ const PROPS = [
     type: 'number',
     default: '12',
     description:
-      'Maximum captures per second. Within a shared source, the highest fps sets the capture rate.',
+      'Maximum captures per second, up to the display refresh rate. Within a shared source, the highest fps sets the capture rate.',
+  },
+  {
+    name: 'delay',
+    type: 'number',
+    default: '0',
+    description:
+      'Milliseconds behind the source to run. Mirrors of one source share its capture history, so a trail of delayed mirrors costs no extra captures.',
   },
   {
     name: 'pixelRatio',
@@ -37,13 +44,6 @@ const PROPS = [
       'Alignment of the bitmap when objectFit crops or letterboxes it.',
   },
   {
-    name: 'capture',
-    type: "'auto' | 'always' | 'once'",
-    default: "'auto'",
-    description:
-      'auto skips captures while the source is unchanged; always captures up to fps regardless; once paints a single frame.',
-  },
-  {
     name: 'background',
     type: 'string | null',
     default: 'null',
@@ -54,7 +54,8 @@ const PROPS = [
     name: 'paused',
     type: 'boolean',
     default: 'false',
-    description: 'Suspends capturing. The last frame stays on screen.',
+    description:
+      'Suspends capturing. The last frame stays on screen, and a mirror paused before it has one still captures a single frame to hold.',
   },
 ]
 
