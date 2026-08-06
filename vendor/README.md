@@ -69,6 +69,20 @@ next to upstream's own cases in the `visual accuracy:` groups.
   native appearance also no longer paints its own background: the theme covers
   the control, so an unstyled input's white `field` background was showing at
   both ends of the track.
+- **A rounded border keeps one colour per side.** Sides were treated as one
+  border whenever their widths and styles matched, on the grounds that whoever
+  wrote them meant one border, and the whole ring was stroked in the top colour.
+  That is exactly the shape of a spinner — a circle faint on three sides and
+  bright on top, spun by an animation — so every spinner on the page came out a
+  solid bright ring standing still. Sides that disagree on colour are now drawn
+  one at a time, each filling the ring between the border box and the box it
+  encloses within the wedge its two corner miters cut out, which is where CSS
+  hands a rounded corner from one side to the next; on a circle with even
+  borders those are the diagonals, so the bright part is a quarter arc. Drawing
+  them as the square edges the unrounded path uses would have left the corners
+  of a circle bare, since a 2px band along the top never reaches the diagonal.
+  Borders whose sides agree still take the single stroke, which is a quarter of
+  the work and the only path that draws dashes and dots.
 - **`text-overflow: ellipsis` is honoured.** Truncation is a paint-time effect:
   layout keeps the whole string, so the renderer painted all of it and let the
   overflow clip cut the last glyph in half, with no ellipsis. Chrome reports the

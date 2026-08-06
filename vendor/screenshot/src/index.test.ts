@@ -1151,6 +1151,77 @@ describe('screenshot', () => {
     })
   })
 
+  describe('visual accuracy: borders of differing colours', () => {
+    it('keeps a ring one colour on top and another elsewhere', async () => {
+      // The spinner pattern: a circle whose top quarter is the only bright
+      // part of it, which reads as motion once it is rotating.
+      const spinner = createElement({
+        width: '40px',
+        height: '40px',
+        boxSizing: 'border-box',
+        borderRadius: '50%',
+        borderWidth: '4px',
+        borderStyle: 'solid',
+        borderColor: 'rgb(255, 0, 0)',
+        borderTopColor: 'rgb(0, 0, 255)',
+      })
+      container.appendChild(spinner)
+
+      const canvas = await screenshot.canvas(spinner, {
+        scale: 1,
+        backgroundColor: null,
+      })
+
+      expectColor(sampleArea(canvas, 19, 1, 2), { r: 0, g: 0, b: 255, a: 255 }, 12)
+      expectColor(
+        sampleArea(canvas, 19, 37, 2),
+        { r: 255, g: 0, b: 0, a: 255 },
+        12
+      )
+      expectColor(sampleArea(canvas, 1, 19, 2), { r: 255, g: 0, b: 0, a: 255 }, 12)
+      expectColor(
+        sampleArea(canvas, 37, 19, 2),
+        { r: 255, g: 0, b: 0, a: 255 },
+        12
+      )
+
+      // The middle of the ring is left alone, and so is the corner outside it.
+      expect(getPixel(canvas, 20, 20).a).toBe(0)
+      expect(getPixel(canvas, 1, 1).a).toBe(0)
+
+      // Where the two colours meet, on the diagonal, the ring carries on
+      // rather than breaking: square edges would leave this bare.
+      expect(getPixel(canvas, 6, 6).a).toBeGreaterThan(200)
+      expect(getPixel(canvas, 33, 6).a).toBeGreaterThan(200)
+    })
+
+    it('carries a rounded corner from one side to the next', async () => {
+      const box = createElement({
+        width: '60px',
+        height: '40px',
+        boxSizing: 'border-box',
+        borderRadius: '12px',
+        borderWidth: '4px',
+        borderStyle: 'solid',
+        borderColor: 'rgb(255, 0, 0)',
+        borderTopColor: 'rgb(0, 0, 255)',
+      })
+      container.appendChild(box)
+
+      const canvas = await screenshot.canvas(box, {
+        scale: 1,
+        backgroundColor: null,
+      })
+
+      // Around the top-left corner: the arc above the diagonal belongs to the
+      // top side, the arc below it to the left side.
+      expectColor(sampleArea(canvas, 8, 2, 2), { r: 0, g: 0, b: 255, a: 255 }, 20)
+      expectColor(sampleArea(canvas, 2, 8, 2), { r: 255, g: 0, b: 0, a: 255 }, 20)
+      // And the diagonal itself is painted rather than left as a notch.
+      expect(getPixel(canvas, 5, 5).a).toBeGreaterThan(200)
+    })
+  })
+
   describe('visual accuracy: transforms', () => {
     it('renders scaled element', async () => {
       const wrapper = createElement({

@@ -248,8 +248,9 @@ progress knob is a circle standing proud of a 4px rounded track, and it was
 shaved into the bar until the knob was moved out to a square-cornered parent.
 That, a CSS transform being dropped from an inline `<svg>`, text shadows landing
 a quarter of the distance from their text, `text-overflow: ellipsis` being
-painted as a glyph cut in half, and a range input's track coming out a single
-solid bar are all fixed in `vendor/screenshot`, each with a test;
+painted as a glyph cut in half, a range input's track coming out a single solid
+bar, and a spinner's ring coming out bright the whole way round rather than
+bright on one side are all fixed in `vendor/screenshot`, each with a test;
 `vendor/README.md` explains what each one was. `.perf/overflow.mjs` is how the
 clipping one was found: it captures the knob against a rounded track and a
 square one, and reports how much of the overflowing part survived.

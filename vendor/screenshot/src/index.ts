@@ -4514,9 +4514,11 @@ async function renderElementNode(
 
   if (hasRadius && uniformBorder) {
     drawRoundedBorder(context, rect, radii, uniformBorder)
+  } else if (hasRadius) {
+    // Sides that differ, drawn one at a time around the curve.
+    drawRoundedBordersPerSide(context, rect, radii, style)
   } else {
     // Simple solid rectangular borders as a fallback
-    // Pass radii so fallback doesn't draw square corners on rounded elements
     drawBorders(context, rect, style, radii, hasRadius)
   }
 
@@ -6200,9 +6202,9 @@ function drawBorders(
 
   context.save()
 
-  // Safety clip: If we are in this fallback function but the element actually
-  // has a border radius (e.g. because borders are non-uniform colors), we
-  // must clip the square borders to the rounded shape so they don't stick out.
+  // Safety clip: a rounded element is drawn by `drawRoundedBordersPerSide`
+  // rather than here, but should one reach this path anyway, its square edges
+  // are clipped to the rounded shape so they do not stick out.
   if (hasRadius && radii) {
     context.beginPath()
     pathRoundedRect(context, rect, radii)
@@ -6858,14 +6860,25 @@ function getUniformBorder(style: CSSStyleDeclaration): UniformBorder | null {
     return null
   }
 
-  // 4. Color Check: We ignore color value differences (e.g. rgba vs rgb)
-  // and simply assume if the other props match, the author intended a uniform border.
-  // We'll use the top color as the representative color.
+  // 4. Color Check: the four sides have to agree, since a ring that is one
+  // colour on top and another elsewhere is a spinner rather than a border
+  // drawn in the top colour. Resolved first so that two ways of writing the
+  // same colour still count as one.
   const topColor = resolveCanvasColor(
     style.borderTopColor,
     style,
     'transparent'
   )
+  const sideColors = [
+    style.borderRightColor,
+    style.borderBottomColor,
+    style.borderLeftColor,
+  ]
+  for (const sideColor of sideColors) {
+    if (resolveCanvasColor(sideColor, style, 'transparent') !== topColor) {
+      return null
+    }
+  }
 
   return {
     width: topWidth,
@@ -6918,6 +6931,195 @@ function drawRoundedBorder(
   pathRoundedRect(context, innerRect, innerRadii)
   context.stroke()
   context.restore()
+}
+
+/**
+ * Draw a rounded border whose sides differ, one side at a time.
+ *
+ * Each side owns the part of the border ring within the wedge running from the
+ * box's corners to the corners of the box the border encloses, which is where
+ * CSS hands a rounded corner from one side to the next. Filling the ring within
+ * that wedge keeps every side on the curve, where the square edges the
+ * unrounded path draws would leave the corners of a circle bare.
+ */
+function drawRoundedBordersPerSide(
+  context: CanvasRenderingContext2D,
+  rect: DOMRect,
+  radii: BorderRadii,
+  style: CSSStyleDeclaration
+): void {
+  const top = Math.max(0, parseCssLength(style.borderTopWidth))
+  const right = Math.max(0, parseCssLength(style.borderRightWidth))
+  const bottom = Math.max(0, parseCssLength(style.borderBottomWidth))
+  const left = Math.max(0, parseCssLength(style.borderLeftWidth))
+
+  const innerLeft = rect.left + left
+  const innerTop = rect.top + top
+  const innerRight = Math.max(innerLeft, rect.right - right)
+  const innerBottom = Math.max(innerTop, rect.bottom - bottom)
+  const innerRect = {
+    left: innerLeft,
+    top: innerTop,
+    width: innerRight - innerLeft,
+    height: innerBottom - innerTop,
+  }
+  const innerRadii = shrinkBorderRadiiForInnerBox(
+    radii,
+    left,
+    top,
+    right,
+    bottom
+  )
+
+  // Each side is bounded by the two rays running from the corners of the box
+  // towards the matching corners of the box the border encloses. On a circle
+  // with even borders those rays are the diagonals, which is where a spinner's
+  // bright arc ends. The rays lean inwards, so a side is the triangle up to
+  // where they cross, or, where they run apart, a quad carried past the box.
+  const reach = rect.width + rect.height
+  const wedge = (
+    cornerX: number,
+    cornerY: number,
+    nextCornerX: number,
+    nextCornerY: number,
+    innerX: number,
+    innerY: number,
+    nextInnerX: number,
+    nextInnerY: number
+  ): Array<[number, number]> => {
+    const corner: [number, number] = [cornerX, cornerY]
+    const nextCorner: [number, number] = [nextCornerX, nextCornerY]
+    const dx = innerX - cornerX
+    const dy = innerY - cornerY
+    const nextDx = nextInnerX - nextCornerX
+    const nextDy = nextInnerY - nextCornerY
+
+    const denominator = dx * nextDy - dy * nextDx
+    if (Math.abs(denominator) > 1e-6) {
+      const gapX = nextCornerX - cornerX
+      const gapY = nextCornerY - cornerY
+      const distance = (gapX * nextDy - gapY * nextDx) / denominator
+      const nextDistance = (gapX * dy - gapY * dx) / denominator
+      if (distance > 0 && nextDistance > 0) {
+        return [
+          corner,
+          nextCorner,
+          [cornerX + dx * distance, cornerY + dy * distance],
+        ]
+      }
+    }
+
+    const length = Math.hypot(dx, dy) || 1
+    const nextLength = Math.hypot(nextDx, nextDy) || 1
+    return [
+      corner,
+      nextCorner,
+      [
+        nextCornerX + (nextDx / nextLength) * reach,
+        nextCornerY + (nextDy / nextLength) * reach,
+      ],
+      [cornerX + (dx / length) * reach, cornerY + (dy / length) * reach],
+    ]
+  }
+
+  const sides = [
+    {
+      width: top,
+      color: style.borderTopColor,
+      style: style.borderTopStyle,
+      wedge: wedge(
+        rect.left,
+        rect.top,
+        rect.right,
+        rect.top,
+        innerLeft,
+        innerTop,
+        innerRight,
+        innerTop
+      ),
+    },
+    {
+      width: right,
+      color: style.borderRightColor,
+      style: style.borderRightStyle,
+      wedge: wedge(
+        rect.right,
+        rect.top,
+        rect.right,
+        rect.bottom,
+        innerRight,
+        innerTop,
+        innerRight,
+        innerBottom
+      ),
+    },
+    {
+      width: bottom,
+      color: style.borderBottomColor,
+      style: style.borderBottomStyle,
+      wedge: wedge(
+        rect.right,
+        rect.bottom,
+        rect.left,
+        rect.bottom,
+        innerRight,
+        innerBottom,
+        innerLeft,
+        innerBottom
+      ),
+    },
+    {
+      width: left,
+      color: style.borderLeftColor,
+      style: style.borderLeftStyle,
+      wedge: wedge(
+        rect.left,
+        rect.bottom,
+        rect.left,
+        rect.top,
+        innerLeft,
+        innerBottom,
+        innerLeft,
+        innerTop
+      ),
+    },
+  ]
+
+  for (const side of sides) {
+    const sideStyle = (side.style || '').trim().toLowerCase()
+    const color = resolveCanvasColor(side.color, style, 'transparent')
+    if (
+      side.width <= 0 ||
+      !sideStyle ||
+      sideStyle === 'none' ||
+      sideStyle === 'hidden' ||
+      !color ||
+      color === 'transparent' ||
+      color === 'rgba(0, 0, 0, 0)'
+    ) {
+      continue
+    }
+
+    context.save()
+
+    context.beginPath()
+    context.moveTo(side.wedge[0][0], side.wedge[0][1])
+    for (let index = 1; index < side.wedge.length; index++) {
+      context.lineTo(side.wedge[index][0], side.wedge[index][1])
+    }
+    context.closePath()
+    context.clip()
+
+    // The ring between the border box and the box it encloses, as one path so
+    // that the fill rule leaves the middle of the element alone.
+    context.beginPath()
+    pathRoundedRect(context, rect, radii)
+    pathRoundedRect(context, innerRect, innerRadii)
+    context.fillStyle = color
+    context.fill('evenodd')
+
+    context.restore()
+  }
 }
 
 function drawOutline(
