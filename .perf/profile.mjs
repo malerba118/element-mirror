@@ -21,7 +21,7 @@ const TARGET = Number(process.argv[3] ?? 40)
 const SECONDS = 2
 const SCALE = 2
 
-const dist = new URL('../vendor/snapdom/src/', import.meta.url).pathname
+const dist = new URL('../packages/snapdom/src/', import.meta.url).pathname
 
 const browser = await chromium.launch()
 const page = await browser.newPage({
@@ -40,7 +40,7 @@ await page.addScriptTag({
 await page.waitForFunction(() => Boolean(window.__lib))
 await page.evaluate(() => {
   for (const canvas of document.querySelectorAll(
-    'canvas[data-screenshot-ignore]'
+    'canvas[data-element-mirror-ignore]'
   )) {
     canvas.remove()
   }

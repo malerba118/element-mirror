@@ -16,14 +16,12 @@ import { compare, decodePng } from './pixels.mjs'
  * is drawn scaled and everything in it is then wrong by a little.
  *
  * This measures the mirrors as the component actually draws them, engine and
- * sizing and blit included, which is what `.perf/renderers.mjs` deliberately
- * does not: that one calls each renderer directly to compare the renderers.
+ * sizing and blit included.
  *
  *   node .perf/fidelity.mjs                     rank every specimen
- *   node .perf/fidelity.mjs --engine snapdom    rank them on another engine
  *   node .perf/fidelity.mjs --shot masks tabs   save those pairs as PNGs
  *
- * Needs the dev server up: `npm run dev`.
+ * Needs the dev server up: `pnpm dev`.
  */
 
 const URL = process.env.GALLERY_URL ?? 'http://localhost:5173/gallery'
@@ -33,8 +31,6 @@ const DIFFERENT_ENOUGH = 32
 const argv = process.argv.slice(2)
 const shotIndex = argv.indexOf('--shot')
 const wanted = shotIndex === -1 ? [] : argv.slice(shotIndex + 1)
-const engineIndex = argv.indexOf('--engine')
-const engine = engineIndex === -1 ? null : argv[engineIndex + 1]
 
 const browser = await chromium.launch()
 const page = await browser.newPage({
@@ -42,10 +38,6 @@ const page = await browser.newPage({
   deviceScaleFactor: 2,
 })
 await page.goto(URL, { waitUntil: 'networkidle' })
-
-if (engine) {
-  await page.click(`button[data-engine="${engine}"]`)
-}
 
 // A mirror off screen stops capturing, so nothing below the fold has a frame
 // until the page has been walked past it.
@@ -83,7 +75,7 @@ for (const name of subjects) {
       await figure.locator('[data-specimen-source]').screenshot()
     )
     const mirror = decodePng(
-      await figure.locator('canvas[data-screenshot-ignore]').screenshot()
+      await figure.locator('canvas[data-element-mirror-ignore]').screenshot()
     )
     results.push({ name, ...compare(source, mirror, DIFFERENT_ENOUGH) })
   } catch (error) {
@@ -96,7 +88,6 @@ await browser.close()
 if (wanted.length > 0) process.exit(0)
 
 results.sort((a, b) => (b.differingPercent ?? -1) - (a.differingPercent ?? -1))
-console.log(`engine: ${engine ?? 'as the page starts up'}`)
 console.log(['DIFF%', 'MEAN', 'WORST', 'SIZE', 'SPECIMEN'].join('\t'))
 for (const result of results) {
   if (result.error) {

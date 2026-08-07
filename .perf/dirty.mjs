@@ -60,7 +60,7 @@ await page.evaluate(() => {
       s.querySelector('h2')?.textContent?.includes('sizes like an image')
     )
     const canvas = Array.from(
-      section.querySelectorAll('canvas[data-screenshot-ignore]')
+      section.querySelectorAll('canvas[data-element-mirror-ignore]')
     ).find((node) => !node.style.width && !node.style.height)
     return canvas ? canvas.toDataURL() : null
   }

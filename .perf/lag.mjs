@@ -109,7 +109,7 @@ async function sample(samples, spacingMs) {
         (s) => s.querySelector('h2')?.textContent?.includes('run behind')
       )
       const canvases = Array.from(
-        section.querySelectorAll('canvas[data-screenshot-ignore]')
+        section.querySelectorAll('canvas[data-element-mirror-ignore]')
       )
       const readings = canvases.map(() => [])
 

@@ -27,7 +27,7 @@ function withExtensions(source, directory) {
 /**
  * Serves ES modules to a page from disk.
  *
- * The vendored renderers are loaded as source rather than as a bundle, so there
+ * The forked engine is loaded as source rather than as a bundle, so there
  * is nothing to build before measuring and a profile names real functions.
  *
  * @param {import('playwright').Page} page

@@ -11,7 +11,7 @@ import { serveModules } from './serve.mjs'
 const PAGE = process.env.MIRROR_URL ?? 'http://localhost:5173/'
 const SELECTOR = process.argv[2] ?? '#playground-source'
 
-const dist = new URL('../vendor/snapdom/src/', import.meta.url).pathname
+const dist = new URL('../packages/snapdom/src/', import.meta.url).pathname
 const browser = await chromium.launch()
 const page = await browser.newPage({
   viewport: { width: 1280, height: 900 },
@@ -28,7 +28,7 @@ await page.addScriptTag({
 })
 await page.waitForFunction(() => Boolean(window.__lib))
 await page.evaluate(() => {
-  for (const c of document.querySelectorAll('canvas[data-screenshot-ignore]')) c.remove()
+  for (const c of document.querySelectorAll('canvas[data-element-mirror-ignore]')) c.remove()
 })
 await page.waitForTimeout(400)
 

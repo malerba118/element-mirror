@@ -1,0 +1,5 @@
+packages:
+  - packages/*
+  - apps/*
+  # The perf harness keeps its dotdir name so every doc reference stays valid.
+  - .perf

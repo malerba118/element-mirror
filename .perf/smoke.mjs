@@ -37,7 +37,7 @@ for (const [index, title] of titles.entries()) {
   const mirrors = await page.evaluate((position) => {
     const section = document.querySelectorAll('section')[position]
     return Array.from(
-      section.querySelectorAll('canvas[data-screenshot-ignore]')
+      section.querySelectorAll('canvas[data-element-mirror-ignore]')
     ).map((canvas) => {
       const context = canvas.getContext('2d')
       const { data } = context.getImageData(0, 0, canvas.width, canvas.height)

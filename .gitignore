@@ -2,29 +2,16 @@
 
 # dependencies
 node_modules/
-/.pnp
-.pnp.*
-.yarn/*
-!.yarn/patches
-!.yarn/plugins
-!.yarn/releases
-!.yarn/versions
 
 # testing
 /coverage
 
 # next.js
-/.next/
-/out/
+apps/demo/.next/
+apps/demo/out/
 
-# production
-/build
-
-# vendored screenshot build, only needed by the perf harness
-/vendor/screenshot/dist
-
-# side-by-side comparisons written by a failing vendored screenshot test
-/vendor/screenshot/src/__failures__
+# published package builds
+packages/element-mirror/dist/
 
 # misc
 .DS_Store
@@ -32,8 +19,6 @@ node_modules/
 
 # debug
 npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
 .pnpm-debug.log*
 
 # env files (can opt-in for committing if needed)

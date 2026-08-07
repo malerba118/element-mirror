@@ -76,7 +76,7 @@ const settledFps = await readFps()
 console.log(`slider ceiling is ${ceiling}fps`)
 
 const result = await page.evaluate(async (seconds) => {
-  const canvas = document.querySelector('section canvas[data-screenshot-ignore]')
+  const canvas = document.querySelector('section canvas[data-element-mirror-ignore]')
   const scratch = document.createElement('canvas')
   scratch.width = 32
   scratch.height = 32

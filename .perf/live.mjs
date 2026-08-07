@@ -28,7 +28,7 @@ const sample = await page.evaluate(async () => {
   const original = CanvasRenderingContext2D.prototype.drawImage
   CanvasRenderingContext2D.prototype.drawImage = function (...args) {
     const canvas = this.canvas
-    if (canvas?.hasAttribute?.('data-screenshot-ignore')) {
+    if (canvas?.hasAttribute?.('data-element-mirror-ignore')) {
       counts.set(canvas, (counts.get(canvas) ?? 0) + 1)
     }
     return original.apply(this, args)

@@ -34,8 +34,8 @@ const SCALE = 2
  */
 const dist =
   process.env.MIRROR_SNAPDOM === 'npm'
-    ? new URL('../node_modules/@zumer/snapdom/dist/', import.meta.url).pathname
-    : new URL('../vendor/snapdom/src/', import.meta.url).pathname
+    ? new URL('./node_modules/@zumer/snapdom/dist/', import.meta.url).pathname
+    : new URL('../packages/snapdom/src/', import.meta.url).pathname
 const entry = process.env.MIRROR_SNAPDOM === 'npm' ? 'snapdom.mjs' : 'index.js'
 
 const browser = await chromium.launch()
@@ -57,7 +57,7 @@ await page.waitForFunction(() => Boolean(window.__lib))
 // The page's own mirrors would only compete for the thread being measured.
 await page.evaluate(() => {
   for (const canvas of document.querySelectorAll(
-    'canvas[data-screenshot-ignore]'
+    'canvas[data-element-mirror-ignore]'
   )) {
     canvas.remove()
   }

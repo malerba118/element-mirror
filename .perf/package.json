@@ -3,9 +3,8 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@renoun/screenshot": "0.3.3",
     "@zumer/snapdom": "^2.23.2",
-    "modern-screenshot": "^4.7.0",
+    "playwright": "1.58.2",
     "puppeteer-core": "^25.5.0"
   }
 }

@@ -36,7 +36,7 @@ for (const name of Object.keys(VARIANTS)) {
   await wait(1000)
 
   await page.evaluate((key) => {
-    const card = document.querySelector('section canvas[data-screenshot-ignore]')
+    const card = document.querySelector('section canvas[data-element-mirror-ignore]')
       ? Array.from(document.querySelectorAll('section'))
           .find((s) => s.querySelector('h2')?.textContent?.includes('Playground'))
           .querySelector('[class*="bg-neutral-950"]')

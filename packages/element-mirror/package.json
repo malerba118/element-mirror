@@ -1,0 +1,57 @@
+{
+  "name": "@frostin/element-mirror",
+  "version": "0.1.0",
+  "description": "A React component that mirrors any DOM element into a <canvas> at up to 60fps: shared captures, delay trails, drag ghosts.",
+  "type": "module",
+  "main": "./src/index.ts",
+  "types": "./src/index.ts",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "publishConfig": {
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "exports": {
+      ".": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/frostin/element-mirror",
+    "directory": "packages/element-mirror"
+  },
+  "keywords": [
+    "react",
+    "canvas",
+    "mirror",
+    "screenshot",
+    "drag-ghost"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "pnpm build"
+  },
+  "peerDependencies": {
+    "react": ">=18",
+    "react-dom": ">=18"
+  },
+  "dependencies": {
+    "@frostin/snapdom": "workspace:^"
+  },
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "typescript": "^5"
+  }
+}

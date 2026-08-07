@@ -1,0 +1,42 @@
+{
+  "name": "@frostin/snapdom",
+  "version": "2.23.1",
+  "description": "A fork of @zumer/snapdom tuned for repeated live captures: per-node style invalidation, smaller per-frame SVGs, and a caller-supplied canvas. See FORK.md.",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./types/snapdom.d.ts",
+  "exports": {
+    ".": {
+      "types": "./types/snapdom.d.ts",
+      "default": "./src/index.js"
+    }
+  },
+  "files": [
+    "src",
+    "types",
+    "FORK.md"
+  ],
+  "sideEffects": false,
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/frostin/element-mirror",
+    "directory": "packages/snapdom"
+  },
+  "keywords": [
+    "snapdom",
+    "screenshot",
+    "dom-to-image",
+    "svg",
+    "canvas"
+  ],
+  "scripts": {
+    "test": "vitest --run"
+  },
+  "devDependencies": {
+    "@vitest/browser": "4.0.18",
+    "@vitest/browser-playwright": "4.0.18",
+    "playwright": "1.58.2",
+    "vitest": "4.0.18"
+  }
+}

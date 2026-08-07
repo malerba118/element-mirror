@@ -39,7 +39,7 @@ const readings = await page.evaluate(async (cases) => {
   const card = document.querySelector('[class*="bg-neutral-950"]')
   const canvas = Array.from(document.querySelectorAll('section'))
     .find((s) => s.querySelector('h2')?.textContent?.includes('Playground'))
-    .querySelector('canvas[data-screenshot-ignore]')
+    .querySelector('canvas[data-element-mirror-ignore]')
 
   const strip = document.createElement('div')
   strip.style.cssText = 'padding:14px 8px;background:#000;display:flex;gap:20px'
