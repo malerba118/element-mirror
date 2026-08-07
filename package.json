@@ -8,7 +8,8 @@
     "start": "next start",
     "lint": "eslint",
     "screenshot:build": "tsc -p vendor/screenshot",
-    "screenshot:test": "vitest --run --root vendor/screenshot"
+    "screenshot:test": "vitest --run --root vendor/screenshot",
+    "snapdom:test": "vitest --run --config vitest.snapdom.config.ts"
   },
   "dependencies": {
     "@zumer/snapdom": "^2.23.1",

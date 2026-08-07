@@ -13,11 +13,21 @@ const cardRef = useRef<HTMLDivElement>(null)
 <ElementMirror source={cardRef} fps={12} />
 ```
 
-Captures come from [`@renoun/screenshot`](https://github.com/souporserious/renoun),
-which paints the element's subtree straight into a Canvas2D context by reading
-live computed styles. Its source is vendored in `vendor/screenshot` rather than
-installed, so what it renders badly can be fixed here; `vendor/README.md`
-records where the copy came from and what has changed.
+Captures come from a fork of [SnapDOM](https://github.com/zumerlab/snapdom),
+which clones the element's subtree into an SVG `foreignObject` and lets the
+browser paint it — so masks, blend modes, filters and text shaping come out
+right without anyone reimplementing them. Its source is vendored in
+`vendor/snapdom` rather than installed, so its cost and its mistakes can be
+fixed here; `vendor/README.md` records where the copy came from and what has
+changed. Two other engines stay wired in for comparison behind
+`?engine=` — a fork of
+[`@renoun/screenshot`](https://github.com/souporserious/renoun), which paints
+subtrees into a Canvas2D context itself, and
+[`modern-screenshot`](https://github.com/qq15725/modern-screenshot). SnapDOM
+won on the numbers: on the demo's player card it holds 60 captures a second at
+~5ms of main thread each, where modern-screenshot costs ~44ms a capture and the
+renoun fork ~55ms while getting a good deal of the CSS wrong
+(`.perf/ceiling.mjs` is the referee).
 
 ## Running the demo
 
@@ -302,14 +312,18 @@ landed on, and each bucket is serviced once:
   below `HAVE_CURRENT_DATA`, and capturing then paints a hole where the video
   sits. Those captures are skipped, so mirrors hold their last frame exactly as
   the video element does, and capture again as soon as it recovers.
-- **The loop backs off.** Each capture is timed, and the element's next capture
-  is delayed so capturing stays under `CAPTURE_DUTY_CYCLE` (35%) of wall-clock
-  time. An expensive source degrades to a lower frame rate instead of saturating
-  the main thread. The judgement runs on a rolling average of the last few
-  captures rather than the last one, because a capture is timed across an `await`
-  and so measures whatever else the main thread did meanwhile. Dropping a frame
-  from a rate the source can sustain is worse than answering a real slowdown a
-  few frames late.
+- **The loop backs off.** Each capture reports its cost, and the element's next
+  capture is delayed so capturing stays under `CAPTURE_DUTY_CYCLE` (45%) of the
+  main thread. An expensive source degrades to a lower frame rate instead of
+  saturating the page. The cost that counts is main-thread work only: SnapDOM's
+  captures come in two phases — building the SVG holds the thread, decoding it
+  is the browser working off-thread — and the engine reports the first while
+  the loop overlaps the second with the next frame (`CaptureHandle` in
+  `src/lib/mirror-engines.ts`). Billing the wall clock for the decode wait is
+  the mistake this replaces: it throttled a 60fps mirror to 30 while the main
+  thread sat idle. The judgement runs on a rolling average of the last few
+  captures rather than the last one, since dropping a frame from a rate the
+  source can sustain is worse than answering a real slowdown a few frames late.
 
   This share, rather than the `fps` a mirror asks for, is what decides the rate
   it gets, and it is worth knowing that the two interact: a capture pays for the
@@ -322,48 +336,53 @@ landed on, and each bucket is serviced once:
 
 Measured on this machine with SnapDOM, which is the default engine. Costs differ
 per source, so a number here always names the one it was measured on: the
-playground's player card (`#playground-source`, 46 nodes, video and a CSS
-animation) and the delay showcase's card (`#delay-source`, 11 nodes).
+playground's player card (`#playground-source`, 46 nodes, a CSS animation and
+text on a timer). Asked for 60fps on the live demo page, that card delivers 60
+blits a second at ~5ms of main thread per capture — about 31% of the thread —
+while the page keeps painting at its full refresh rate. `.perf/live.mjs` is the
+measurement: it counts the frames each mirror canvas actually receives on the
+real page, which is the number every other number here exists to serve.
 
-| source               | one capture | what 40fps of it costs |
-| -------------------- | ----------- | ---------------------- |
-| `#delay-source`      | 5.6ms       | 23% of the thread      |
-| `#playground-source` | 14ms        | 57% of the thread      |
+Getting there took work on both sides of the engine seam, and the split is
+worth knowing when something regresses:
 
-Which sets what to expect from `CAPTURE_DUTY_CYCLE`: at 35% the player card
-settles around 23 frames a second, and 40 would need roughly 60%. Two things are
-worth knowing before changing that number, both open leads rather than settled
-work:
+- **Main-thread cost is the style reads.** The fork's per-node snapshot
+  invalidation (PERF-5 in `vendor/README.md`) means a capture re-reads only the
+  nodes that changed — on the player card, the five animating equalizer bars
+  and the clock — instead of all ~340 properties of all 46 nodes.
+- **Wall-clock cost is the SVG decode, and it overlaps.** Each frame's SVG is
+  decoded by the browser off the main thread while the loop moves on
+  (`CaptureHandle`); frames join the timeline in capture order and present when
+  their pixels land. Decode time scales with SVG bytes, which is why the fork
+  also shrinks the CSS it emits (PERF-6) — `.perf/anatomy.mjs` breaks the
+  bytes and their decode cost down.
+- **Each further source needs its own slice of the thread.** Mirrors of the
+  _same_ source are free, since they share captures. A page showing one source
+  at 60fps is a different proposition from a page showing six.
 
-- **The loop over-charges itself on a busy page.** The stats badge reports 30ms a
-  capture for the player card where `.perf/snapdom.mjs` measures 14ms for the
-  same element at the same rate. A capture is timed across an `await`, so
-  whatever else the main thread does meanwhile — the other mirrors on the page,
-  React, the video — is billed to it, and the loop then throttles on a cost that
-  is nearly double the real one. Fixing the estimate is likely worth more than
-  raising the share, and would make the share mean what it says. A median of
-  recent captures rather than a mean would be the cheap version.
-- **The demo page captures many sources at once.** Each one needs its own slice
-  of the thread; mirrors of the _same_ source are free, since they share captures.
-  A page showing one source at 40fps is a different proposition from this one.
+#### What was tried on the engine
 
-#### What was already tried on the engine
-
-Making a capture cheaper by patching SnapDOM was investigated and largely ruled
-out — a capture of a live source is rasterize-bound, not style-bound, and its own
-options are worth nothing here. `vendor/README.md` has the numbers, including a
-per-element style cache that halved the property reads and made captures slower.
-Don't re-run that experiment; the remaining headroom is in this file, not that
-one.
+An earlier pass concluded captures were rasterize-bound and patching SnapDOM
+was a dead end. That conclusion was an artifact of two measurement errors —
+the baseline was taking a Chrome rasterization-cache discount on stale frames,
+and costs were timed across an `await` that is mostly off-thread wait — and it
+reversed on honest numbers. The full story, with the fork's changes and the
+failed first attempt, is in `vendor/README.md`; the moral that survives is to
+watch the `fresh` column next to any cost number, because a capture that got
+cheap by going stale is a fidelity bug wearing a perf win's clothes.
 
 The harness, which is what to reach for before optimizing anything:
 
-| script               | answers                                                           |
-| -------------------- | ----------------------------------------------------------------- |
-| `.perf/snapdom.mjs`  | what a capture costs, in which half, and what it asks the DOM for |
-| `.perf/profile.mjs`  | which functions, plus Chrome's recalc and layout counters         |
-| `.perf/ceiling.mjs`  | what rate each engine can hold on a given source                  |
-| `.perf/fidelity.mjs` | whether a change altered any pixels, against the gallery          |
+| script                | answers                                                           |
+| --------------------- | ----------------------------------------------------------------- |
+| `.perf/live.mjs`      | what each mirror on the real page actually receives, per second   |
+| `.perf/snapdom.mjs`   | what a capture costs, in which half, and what it asks the DOM for |
+| `.perf/anatomy.mjs`   | what the per-frame SVG weighs, part by part, and decodes in       |
+| `.perf/pipeline.mjs`  | whether serialize-then-overlapped-decode still sustains 60fps     |
+| `.perf/profile.mjs`   | which functions, plus Chrome's recalc and layout counters         |
+| `.perf/ceiling.mjs`   | what rate each engine can hold on a given source                  |
+| `.perf/engines.mjs`   | that every engine still delivers, delayed mirrors included        |
+| `.perf/fidelity.mjs`  | whether a change altered any pixels, against the gallery          |
 
 ### Rate
 
@@ -386,9 +405,10 @@ why the refresh rate is the ceiling: rates that divide into it (30 and 60 on a
 frames allow.
 
 Mirrors also stop capturing while scrolled out of view (via
-`IntersectionObserver`) or while the tab is hidden, captures never overlap, and
-`background` is applied when blitting so that mirrors with different backgrounds
-still share one capture.
+`IntersectionObserver`) or while the tab is hidden. A capture's main-thread
+phase never overlaps another's — only its off-thread rasterization runs while
+the loop moves on — and `background` is applied when blitting so that mirrors
+with different backgrounds still share one capture.
 
 Mirrors carry `data-screenshot-ignore`, so a mirror nested inside another
 capture is skipped rather than recursing visually.

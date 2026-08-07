@@ -2,6 +2,7 @@ import {
   captureWith,
   DEFAULT_MIRROR_ENGINE,
   MIRROR_ENGINES,
+  type CaptureHandle,
   type MirrorEngine,
 } from './mirror-engines'
 
@@ -45,23 +46,23 @@ import {
  */
 
 /**
- * Share of wall-clock time the capture loop is allowed to consume.
+ * Share of the main thread the capture loop is allowed to consume.
  *
  * This, and not the `fps` a mirror asks for, is what sets the rate it gets:
  * captures are spaced by cost divided by this, so ten milliseconds a capture at
  * 20% is fifty milliseconds apart however fast the mirror asked to run.
  *
- * Which makes the number self-fulfilling in a way worth knowing about. A
- * capture pays for the style and layout the source invalidated since the last
- * one, so capturing more often makes each one cheaper: the same card costs 14ms
- * a capture at 15 frames a second and 5.6ms at 40. Throttling on the cost
- * measured while throttled therefore settles at a pessimistic rate, and the
- * cost it settled on overstates what the rate it settled at would have taken.
- * 35% is what one source at 40fps actually needs, measured by
- * `.perf/ceiling.mjs`; each further source needs its own share of the thread,
- * while mirrors of the same source are free.
+ * The cost being divided is main-thread work only. An engine that can tell its
+ * own work from time spent awaiting the browser's rasterizer reports just the
+ * work (see CaptureHandle), so a capture whose SVG decode overlaps the next
+ * frame is billed for what it actually took from the page. The player card
+ * costs ~5ms of main thread a capture at 2x; 45% spaces that to ~11ms, which
+ * is what lets a mirror asking for 60 get 60, and `.perf/live.mjs` shows the
+ * page still painting at its full refresh rate alongside. Each further source
+ * needs its own share of the thread, while mirrors of the same source are
+ * free.
  */
-export const CAPTURE_DUTY_CYCLE = 0.35
+export const CAPTURE_DUTY_CYCLE = 0.45
 
 /** Weight of the newest capture in a source's running cost, per capture. */
 const COST_WEIGHT = 0.2
@@ -152,6 +153,13 @@ interface Frame {
   /** The source's CSS size at the time, so a lagging mirror lags in size too. */
   width: number
   height: number
+  /**
+   * Whether the canvas holds the frame yet. A capture returns to the loop when
+   * its main-thread work is done, and the browser may still be rasterizing;
+   * the frame joins the timeline immediately so order is capture order, and is
+   * skipped by presentation until the pixels land.
+   */
+  ready: boolean
 }
 
 interface SubscriberState {
@@ -502,10 +510,11 @@ async function capture(
   // the element dirty rather than be swallowed by this frame.
   state.dirty = false
   const started = performance.now()
+  let handle: CaptureHandle
   try {
     // Always captured transparent; each mirror applies its own background at
     // blit time, so background does not fragment the sharing.
-    await captureWith(currentEngine(), element, canvas, pixelRatio)
+    handle = await captureWith(currentEngine(), element, canvas, pixelRatio)
   } catch (error) {
     if (process.env.NODE_ENV !== 'production') {
       console.warn('ElementMirror: capture failed', element, error)
@@ -515,7 +524,12 @@ async function capture(
     return null
   }
   state.lastCaptureAt = performance.now()
-  const duration = state.lastCaptureAt - started
+  // What throttling is protecting is the main thread, so an engine that can
+  // separate its own work from time spent awaiting the browser's rasterizer is
+  // charged only for the work. SnapDOM decodes its SVG off-thread: billing the
+  // wall clock for that wait would throttle a 60fps mirror to 30 while the
+  // main thread sat idle.
+  const duration = handle.mainThreadMs ?? state.lastCaptureAt - started
   state.costMs =
     state.costMs === 0
       ? duration
@@ -524,26 +538,53 @@ async function capture(
   counters.durationMs += duration
 
   // Timestamped from the start of the capture, which is the moment it depicts.
-  state.timeline.push({
+  // Joins the timeline now, unready, so frames sit in capture order however
+  // rasterization completes; presented the moment the pixels land.
+  const frame: Frame = {
     canvas,
     capturedAt: started,
     width: rect.width,
     height: rect.height,
-  })
+    ready: false,
+  }
+  state.timeline.push(frame)
+  handle.settled.then(
+    () => {
+      frame.ready = true
+      // The mirrors this capture was for get it the moment it lands rather
+      // than at their next scheduled cycle. The shownAt guard keeps this from
+      // adding blits — the next cycle finds the same frame and skips it — so
+      // the rate stays what was asked and only the latency improves.
+      present(due, state, performance.now())
+    },
+    (error) => {
+      if (process.env.NODE_ENV !== 'production') {
+        console.warn('ElementMirror: rasterization failed', element, error)
+      }
+      // The canvas never got its pixels: withdraw the frame, and do not pool
+      // the canvas in case the engine writes to it late.
+      const at = state.timeline.indexOf(frame)
+      if (at !== -1) state.timeline.splice(at, 1)
+      state.dirty = true
+    }
+  )
   return null
 }
 
 /**
- * The frame depicting a moment: the newest one taken at or before it.
+ * The frame depicting a moment: the newest ready one taken at or before it.
  *
  * A mirror reaching further back than the timeline goes gets the oldest frame
  * there is, so a delayed mirror starts out level with the source and falls
- * behind as history accumulates, rather than starting blank.
+ * behind as history accumulates, rather than starting blank. Frames whose
+ * pixels have not landed yet are passed over; until the first of them lands
+ * there is nothing to show at all.
  */
 function frameAt(timeline: Frame[], target: number) {
-  let chosen = timeline[0]
+  let chosen: Frame | null = null
   for (const frame of timeline) {
-    if (frame.capturedAt > target) break
+    if (!frame.ready) continue
+    if (chosen && frame.capturedAt > target) break
     chosen = frame
   }
   return chosen
@@ -556,6 +597,7 @@ function present(due: MirrorSubscriber[], state: SourceState, now: number) {
     const subscriberState = subscribers.get(subscriber)
     if (!subscriberState) continue
     const frame = frameAt(state.timeline, now - subscriber.delay)
+    if (!frame) continue
     // A frame already on the canvas is worth nothing to draw again, which is
     // what keeps a still source from repainting its mirrors every cycle.
     if (subscriberState.shownAt === frame.capturedAt) continue
@@ -580,10 +622,15 @@ function retain(state: SourceState, all: MirrorSubscriber[], now: number) {
   }
 
   // Everything newer than the frame the furthest-behind mirror is due to show.
+  // A frame still waiting on its pixels is never retired — it is the newest
+  // thing there is, whatever its timestamp says — and nothing behind it is
+  // either, or a slow rasterization would get its frame retired mid-flight
+  // and land with nowhere to go.
   const horizon = now - longest
   let keepFrom = 0
   for (let index = 0; index < state.timeline.length; index += 1) {
-    if (state.timeline[index].capturedAt > horizon) break
+    const frame = state.timeline[index]
+    if (!frame.ready || frame.capturedAt > horizon) break
     keepFrom = index
   }
 
@@ -600,7 +647,9 @@ function retain(state: SourceState, all: MirrorSubscriber[], now: number) {
   }
 
   for (const frame of state.timeline.splice(0, keepFrom)) {
-    if (state.pool.length < POOL_LIMIT) state.pool.push(frame.canvas)
+    // An unready frame's canvas still has a rasterization heading for it, so
+    // handing it to the next capture would let the two write over each other.
+    if (frame.ready && state.pool.length < POOL_LIMIT) state.pool.push(frame.canvas)
   }
 }
 

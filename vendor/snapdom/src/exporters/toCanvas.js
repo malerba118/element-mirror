@@ -413,13 +413,20 @@ export async function toCanvas(url, options) {
     outH /= over
   }
 
-  const canvas = document.createElement('canvas')
+  // PERF-6: draw into a caller-provided canvas when given one. A caller looping
+  // captures (a live mirror) otherwise pays a full-canvas copy per frame moving
+  // the pixels from this throwaway canvas onto its own.
+  const canvas = options.canvas instanceof HTMLCanvasElement
+    ? options.canvas
+    : document.createElement('canvas')
   canvas.width = outW * dpr
   canvas.height = outH * dpr
   canvas.style.width = `${outW}px`
   canvas.style.height = `${outH}px`
 
   const ctx = canvas.getContext('2d')
+  if (!ctx) throw new Error('[snapdom] toCanvas: no 2d context on the target canvas')
+  // Setting width/height above already reset the canvas state and cleared it.
   if (dpr !== 1) ctx.scale(dpr, dpr)
 
   if (backgroundColor) {

@@ -54,8 +54,9 @@ const isMirror = (node: Node) =>
   node instanceof Element && node.hasAttribute(IGNORE_ATTRIBUTE)
 
 /**
- * Neither outside renderer paints into a canvas it was handed, so their result
- * is copied into the pooled one. The copy is a real cost of going this way.
+ * modern-screenshot does not paint into a canvas it was handed, so its result
+ * is copied into the pooled one. The SnapDOM fork takes the canvas directly
+ * (its `canvas` option) and skips this copy.
  */
 function copyInto(produced: HTMLCanvasElement, canvas: HTMLCanvasElement) {
   canvas.width = produced.width
@@ -106,34 +107,66 @@ async function modernContextFor(
   return context
 }
 
+/**
+ * A capture in two phases. The promise returning this handle resolves when the
+ * engine is done with the main thread and the next capture may safely begin;
+ * `settled` resolves once the pixels are actually in the canvas. SnapDOM is the
+ * engine the split exists for: it builds an SVG on the main thread and then
+ * waits for the browser to decode it, which happens off-thread and takes
+ * longer than a 60fps frame. An engine that cannot separate the phases settles
+ * before the handle is returned, and the two moments coincide.
+ */
+export interface CaptureHandle {
+  /**
+   * Main-thread cost in milliseconds, when the engine can tell its own work
+   * apart from time spent awaiting the browser. Absent, the caller has only
+   * the wall clock to go by.
+   */
+  mainThreadMs?: number
+  /** Resolves when the canvas holds the frame; rejects if it never will. */
+  settled: Promise<void>
+}
+
+const SETTLED: Promise<void> = Promise.resolve()
+
 const ENGINES: Record<
   MirrorEngine,
   (
     element: Element,
     canvas: HTMLCanvasElement,
     scale: number
-  ) => Promise<unknown>
+  ) => Promise<CaptureHandle>
 > = {
-  fork: (element, canvas, scale) =>
-    screenshot.canvas(element, { canvas, scale, backgroundColor: null }),
+  fork: async (element, canvas, scale) => {
+    await screenshot.canvas(element, { canvas, scale, backgroundColor: null })
+    return { settled: SETTLED }
+  },
 
   snapdom: async (element, canvas, scale) => {
     snapdomModule ??= import('@snapdom')
     const { snapdom } = await snapdomModule
-    copyInto(
-      await snapdom.toCanvas(element as HTMLElement, {
-        // SnapDOM works in device pixels already, so a scale on top of its own
-        // would square it.
-        dpr: scale,
-        scale: 1,
-        // Off by default, and the clone is painted as a detached document that
-        // cannot reach the page's fonts, so text is set in a fallback and every
-        // line of it lands slightly wrong. Costs nothing measurable.
-        embedFonts: true,
-        exclude: [`[${IGNORE_ATTRIBUTE}]`],
-      }),
-      canvas
-    )
+    // Split where SnapDOM itself splits: building the SVG holds the main
+    // thread, while rasterizing it is the browser decoding an image, which
+    // runs off-thread and only costs this loop the wait.
+    const started = performance.now()
+    const snapshot = await snapdom(element as HTMLElement, {
+      // SnapDOM works in device pixels already, so a scale on top of its own
+      // would square it.
+      dpr: scale,
+      scale: 1,
+      // Off by default, and the clone is painted as a detached document that
+      // cannot reach the page's fonts, so text is set in a fallback and every
+      // line of it lands slightly wrong. Costs nothing measurable.
+      embedFonts: true,
+      exclude: [`[${IGNORE_ATTRIBUTE}]`],
+    })
+    const mainThreadMs = performance.now() - started
+    return {
+      mainThreadMs,
+      // The fork draws straight into the pooled canvas (its `canvas` option),
+      // so there is no per-frame copy out of a throwaway one.
+      settled: snapshot.toCanvas({ canvas }).then(() => {}),
+    }
   },
 
   modern: async (element, canvas, scale) => {
@@ -151,15 +184,20 @@ const ENGINES: Record<
         })
     )
     copyInto(await domToCanvas(context), canvas)
+    return { settled: SETTLED }
   },
 }
 
-/** Renders `element` into `canvas` at `scale`, leaving it transparent behind. */
+/**
+ * Renders `element` into `canvas` at `scale`, leaving it transparent behind.
+ * Resolves when the engine's main-thread work is done; the returned handle
+ * says when the canvas holds the frame (see CaptureHandle).
+ */
 export function captureWith(
   engine: MirrorEngine,
   element: Element,
   canvas: HTMLCanvasElement,
   scale: number
-) {
+): Promise<CaptureHandle> {
   return ENGINES[engine](element, canvas, scale)
 }

@@ -47,6 +47,8 @@ export interface ExcludeFonts {
 export interface SnapdomOptions {
   /** Fast path: skip small idle delays where safe. */
   fast?: boolean;
+  /** toCanvas only: draw into this canvas instead of a freshly created one. */
+  canvas?: HTMLCanvasElement;
   /** Output scale multiplier. Takes precedence over width/height. */
   scale?: number;
   /** Device pixel ratio to use for rasterization (defaults to `devicePixelRatio`). */

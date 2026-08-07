@@ -16,6 +16,117 @@ function bumpEpoch() {
 
 export function notifyStyleEpoch() { bumpEpoch() }
 
+/**
+ * PERF-5: per-node invalidation, so a mutation invalidates the nodes it could restyle
+ * instead of every snapshot in the document.
+ *
+ * The global epoch made repeated captures of a live page O(subtree) in style reads: any
+ * mutation anywhere — a React re-render in another card, the caller's own <canvas> resize —
+ * threw away every node's snapshot, and re-reading ~340 computed properties per node is the
+ * single largest cost of a repeat capture. Here a mutation on T invalidates T's parent's
+ * subtree (descendant selectors, inherited properties, and sibling combinators all flow from
+ * there) plus each ancestor's own snapshot (`:has()` lets a descendant change an ancestor's
+ * style — shadcn cards pad themselves by `has-[[data-slot=footer]]`). The epoch stays for
+ * the events whose reach really is the whole document: stylesheet/head changes, font loads,
+ * viewport resizes (media/container queries), and documentElement/body attribute flips.
+ *
+ * What per-node tracking cannot see: `:has()`/hover rules restyling a *cousin* outside the
+ * parent's subtree, shadow-root internals, and programmatic CSSOM edits. Those become at
+ * most MAX_SNAPSHOT_AGE_MS of staleness — every snapshot expires on that bound and is read
+ * fresh — instead of a capture that stays wrong until an unrelated mutation happens by.
+ */
+const nodeStamp = new WeakMap()
+let nodeClock = 0
+const MAX_SNAPSHOT_AGE_MS = 1000
+
+/** The stamp a node's cached style-derived state was computed at (see snapshotIsCurrent). */
+export function nodeStyleStamp(el) {
+  return nodeStamp.get(el) || 0
+}
+
+export function currentStyleEpoch() {
+  return __epoch
+}
+
+/**
+ * Whether style-derived state cached for a node at (epoch, stamp, at) is still current.
+ * Shared bar for the snapshot cache here and the pseudo skip-cache in pseudo.js, so both
+ * invalidate on exactly the same events.
+ */
+export function snapshotIsCurrent(epoch, stamp, at, el, now = performance.now()) {
+  return epoch === __epoch && stamp === nodeStyleStamp(el) && now - at < MAX_SNAPSHOT_AGE_MS
+}
+
+function bumpNode(el) {
+  nodeStamp.set(el, ++nodeClock)
+}
+
+function bumpSubtree(root) {
+  if (!root || root.nodeType !== 1) return
+  nodeClock++
+  nodeStamp.set(root, nodeClock)
+  const all = root.querySelectorAll('*')
+  for (let i = 0; i < all.length; i++) nodeStamp.set(all[i], nodeClock)
+}
+
+/** Invalidate everything a change at `el` could restyle (see PERF-5 above). */
+function invalidateAround(el) {
+  bumpSubtree(el.parentElement || el)
+  for (let p = el.parentElement; p; p = p.parentElement) bumpNode(p)
+}
+
+function invalidateFromRecords(records) {
+  for (const rec of records) {
+    if (isOwnedNode(rec.target)) continue
+    if (rec.type === 'childList') {
+      let allOwned = true
+      for (const n of rec.addedNodes) if (!isOwnedNode(n)) { allOwned = false; break }
+      if (allOwned) for (const n of rec.removedNodes) if (!isOwnedNode(n)) { allOwned = false; break }
+      if (allOwned) continue
+    }
+    const el = rec.target.nodeType === 1 ? rec.target : rec.target.parentElement
+    if (!el) continue
+    // A class/style flip on <html> or <body> (theme switch) reaches everything, and so can
+    // custom properties set there; that is what the epoch is for.
+    if (el === document.documentElement || el === document.body) {
+      bumpEpoch()
+      continue
+    }
+    invalidateAround(el)
+  }
+}
+
+let __domObserver = null
+
+/**
+ * :hover, :focus-visible, :checked and typed values restyle without a single DOM mutation.
+ * The events are cheap and rare next to a capture, and each invalidates only the small
+ * neighborhood its selectors can reach; rules reaching further are caught by the age bound.
+ */
+const INTERACTION_EVENTS = ['pointerover', 'pointerout', 'focusin', 'focusout', 'input', 'change']
+
+/**
+ * Fold everything that happened since the last capture into the per-node stamps, and mark
+ * the nodes that repaint under their own power. Called at the start of every capture:
+ * running animations and transitions restyle their targets continuously and observers never
+ * see it, so their targets' subtrees (animated properties inherit — think color) are
+ * invalidated every capture.
+ * @param {Element} root the element being captured
+ */
+export function beginStyleWindow(root) {
+  if (__domObserver) invalidateFromRecords(__domObserver.takeRecords())
+  let animations = null
+  try {
+    animations = root.getAnimations?.({ subtree: true }) || null
+  } catch { /* detached root */ }
+  if (!animations) return
+  for (const animation of animations) {
+    if (animation.playState !== 'running' && animation.playState !== 'pending') continue
+    const target = animation.effect?.target
+    if (target && target.nodeType === 1) bumpSubtree(target)
+  }
+}
+
 /** Mutations on snapdom-owned helper nodes (sandbox, measure wrapper, warmup img, injected font
  *  links, …) must NOT invalidate the style epoch: every capture creates and removes them, so
  *  without this filter each capture poisons the snapshot cache for the next one — repeated
@@ -43,12 +154,14 @@ let __wired = false
 function setupInvalidationOnce(root = document.documentElement) {
   if (__wired) return
   __wired = true
-  const onRecords = (records) => { if (hasExternalMutation(records)) bumpEpoch() }
   try {
-    const domObs = new MutationObserver(onRecords)
-    domObs.observe(root, { subtree: true, childList: true, characterData: true, attributes: true })
+    // Body mutations invalidate per node (PERF-5); the whole-document epoch is reserved
+    // for changes that really can restyle anything.
+    __domObserver = new MutationObserver(invalidateFromRecords)
+    __domObserver.observe(root, { subtree: true, childList: true, characterData: true, attributes: true })
   } catch { }
   try {
+    const onRecords = (records) => { if (hasExternalMutation(records)) bumpEpoch() }
     const headObs = new MutationObserver(onRecords)
     headObs.observe(document.head, { subtree: true, childList: true, characterData: true, attributes: true })
   } catch { }
@@ -58,6 +171,17 @@ function setupInvalidationOnce(root = document.documentElement) {
       f.addEventListener?.('loadingdone', bumpEpoch)
       f.ready?.then(() => bumpEpoch()).catch(() => { })
     }
+  } catch { }
+  try {
+    const onInteraction = (event) => {
+      const t = event.target
+      if (t && t.nodeType === 1 && !isOwnedNode(t)) invalidateAround(t)
+    }
+    for (const type of INTERACTION_EVENTS) {
+      document.addEventListener(type, onInteraction, { capture: true, passive: true })
+    }
+    // Media and container queries answer to the viewport, and no observer sees that.
+    window.addEventListener('resize', bumpEpoch, { passive: true })
   } catch { }
 }
 
@@ -77,7 +201,7 @@ const BG_INLINE_FLAG_PROPS = [
  */
 export function needsBackgroundInline(source) {
   const rec = snapshotCache.get(source)
-  if (rec && rec.epoch === __epoch) {
+  if (rec && snapshotIsCurrent(rec.epoch, rec.stamp, rec.at, source)) {
     const f = rec.snapshot && rec.snapshot.__needsBgInline
     if (f !== undefined) return f
   }
@@ -209,6 +333,12 @@ function snapshotComputedStyleFull(style, options = {}) {
       'border-left-width', 'border-left-style', 'border-left-color',
       'border-block', 'border-block-width', 'border-block-style', 'border-block-color',
       'border-inline', 'border-inline-width', 'border-inline-style', 'border-inline-color',
+      // The logical longhands too, or they survive the normalization and
+      // re-declare a zero-width solid border after the `border: none` below.
+      'border-block-start', 'border-block-start-width', 'border-block-start-style', 'border-block-start-color',
+      'border-block-end', 'border-block-end-width', 'border-block-end-style', 'border-block-end-color',
+      'border-inline-start', 'border-inline-start-width', 'border-inline-start-style', 'border-inline-start-color',
+      'border-inline-end', 'border-inline-end-width', 'border-inline-end-style', 'border-inline-end-color',
     ]
     for (const p of BORDER_PROPS) delete out[p]
     if (!hasBorderImage) out['border'] = 'none'
@@ -247,16 +377,29 @@ function styleSignature(snap) {
 function getSnapshot(el, preStyle = null, options = {}) {
   const rec = snapshotCache.get(el)
   // The snapshot content depends on embedFonts (extra font props) and excludeStyleProps
-  // (skipped props), but __epoch only bumps on DOM/font mutation — not option changes.
+  // (skipped props), but invalidation only tracks DOM/font mutation — not option changes.
   // Capturing the same element twice with different options must not reuse the snapshot
   // (#348). excludeStyleProps is compared by reference: a fresh value misses safely.
   const ef = !!(options && options.embedFonts)
   const ex = (options && options.excludeStyleProps) || null
-  if (rec && rec.epoch === __epoch && rec.embedFonts === ef && rec.excludeStyleProps === ex) return rec.snapshot
+  const now = performance.now()
+  if (
+    rec &&
+    snapshotIsCurrent(rec.epoch, rec.stamp, rec.at, el, now) &&
+    rec.embedFonts === ef &&
+    rec.excludeStyleProps === ex
+  ) return rec.snapshot
   const style = preStyle || getComputedStyle(el)
   const snap = snapshotComputedStyleFull(style, options)
   stripHeightForWrappers(el, style, snap)
-  snapshotCache.set(el, { epoch: __epoch, snapshot: snap, embedFonts: ef, excludeStyleProps: ex })
+  snapshotCache.set(el, {
+    epoch: __epoch,
+    stamp: nodeStyleStamp(el),
+    at: now,
+    snapshot: snap,
+    embedFonts: ef,
+    excludeStyleProps: ex
+  })
   return snap
 }
 

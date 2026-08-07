@@ -48,6 +48,8 @@ export const cache = {
   burstAdvice: new WeakMap(),
   /** Fires the reconcile suggestion at most once per page load (see capture.js). */
   warnedReconcile: false,
+  /** PERF-6: memoized used-tag walks per capture root, validated by style stamp. */
+  tagKeys: new WeakMap(),
   font: new Set(),
   session: {
     styleMap: new Map(),
@@ -106,6 +108,7 @@ export function applyCachePolicy(policy = 'soft') {
 
       cache.computedStyle = new WeakMap()
       cache.measureHints  = new WeakMap()
+      cache.tagKeys       = new WeakMap()
       cache.baseStyle     = new EvictingMap(MAX_BASE_STYLE)
       cache.defaultStyle  = new EvictingMap(MAX_DEFAULT_STYLE)
       cache.image         = new EvictingMap(MAX_IMAGE)

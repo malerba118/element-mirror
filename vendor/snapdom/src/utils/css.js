@@ -92,6 +92,77 @@ export function getDefaultStyleForTag(tagName) {
 /** Tokens "animation"/"transition" anywhere in the name (dash-bounded). */
 const NO_PAINT_TOKEN = /(?:^|-)(animation|transition)(?:-|$)/i
 
+/**
+ * PERF-6: computed-style enumeration lists box properties twice, physical and
+ * logical, so the generated CSS re-states most of a box a second time (~20 of
+ * the ~55 declarations of a typical class, parsed again by every
+ * rasterization). A logical declaration is only dropped when the same style
+ * map carries its physical counterpart with an identical value — Chrome's
+ * resolved values genuinely differ between the forms in places (`min-width`
+ * resolves `auto` to `0px`, `min-inline-size` reports `auto`), and there a
+ * logical override is load-bearing and must stay. Mapping is writing-mode
+ * dependent, so nothing is dropped off horizontal-tb LTR.
+ */
+const LOGICAL_TO_PHYSICAL = new Map(Object.entries({
+  'block-size': 'height',
+  'inline-size': 'width',
+  'min-block-size': 'min-height',
+  'min-inline-size': 'min-width',
+  'max-block-size': 'max-height',
+  'max-inline-size': 'max-width',
+  'margin-block-start': 'margin-top',
+  'margin-block-end': 'margin-bottom',
+  'margin-inline-start': 'margin-left',
+  'margin-inline-end': 'margin-right',
+  'padding-block-start': 'padding-top',
+  'padding-block-end': 'padding-bottom',
+  'padding-inline-start': 'padding-left',
+  'padding-inline-end': 'padding-right',
+  'inset-block-start': 'top',
+  'inset-block-end': 'bottom',
+  'inset-inline-start': 'left',
+  'inset-inline-end': 'right',
+  'border-block-start-width': 'border-top-width',
+  'border-block-start-style': 'border-top-style',
+  'border-block-start-color': 'border-top-color',
+  'border-block-end-width': 'border-bottom-width',
+  'border-block-end-style': 'border-bottom-style',
+  'border-block-end-color': 'border-bottom-color',
+  'border-inline-start-width': 'border-left-width',
+  'border-inline-start-style': 'border-left-style',
+  'border-inline-start-color': 'border-left-color',
+  'border-inline-end-width': 'border-right-width',
+  'border-inline-end-style': 'border-right-style',
+  'border-inline-end-color': 'border-right-color',
+  'border-start-start-radius': 'border-top-left-radius',
+  'border-start-end-radius': 'border-top-right-radius',
+  'border-end-start-radius': 'border-bottom-left-radius',
+  'border-end-end-radius': 'border-bottom-right-radius',
+  'overflow-block': 'overflow-y',
+  'overflow-inline': 'overflow-x',
+  'overscroll-behavior-block': 'overscroll-behavior-y',
+  'overscroll-behavior-inline': 'overscroll-behavior-x',
+  'contain-intrinsic-block-size': 'contain-intrinsic-height',
+  'contain-intrinsic-inline-size': 'contain-intrinsic-width',
+}))
+
+/**
+ * Whether `prop` in this style map is a logical alias saying nothing its
+ * physical counterpart doesn't already say (see LOGICAL_TO_PHYSICAL).
+ * @param {string} prop
+ * @param {Record<string, string>} styles the map the declaration comes from
+ */
+export function isRedundantLogicalProp(prop, styles) {
+  const physical = LOGICAL_TO_PHYSICAL.get(prop)
+  if (physical === undefined) return false
+  if (styles[physical] !== styles[prop]) return false
+  const writingMode = styles['writing-mode']
+  if (writingMode && writingMode !== 'horizontal-tb') return false
+  const direction = styles['direction']
+  if (direction && direction !== 'ltr') return false
+  return true
+}
+
 /** Prefixes that never affect the static pixel of the frame. */
 const NO_PAINT_PREFIX = /^(--.+|view-timeline|scroll-timeline|animation-trigger|offset-|position-try|app-region|interactivity|overlay|view-transition|-webkit-locale|-webkit-user-(?:drag|modify)|-webkit-tap-highlight-color|-webkit-text-security)$/i
 
@@ -213,6 +284,7 @@ export function getStyleKey(snapshot, tagName, sizedByContent = true, isFlexItem
   let keptMinWidth = false
   for (const prop in snapshot) {
     if (shouldIgnoreProp(prop)) continue
+    if (isRedundantLogicalProp(prop, snapshot)) continue
     const value = snapshot[prop]
     if (soften) {
       if (HARD_WIDTH_PROPS.has(prop)) continue // never freeze a content/algorithm width
@@ -308,15 +380,56 @@ export function generateDedupedBaseCSS(usedTagNames) {
 
     // Agrupamos por firma
     if (!groups.has(key)) {
-      groups.set(key, [])
+      groups.set(key, { tagList: [], styles })
     }
-    groups.get(key).push(tagName)
+    groups.get(key).tagList.push(tagName)
   }
 
-  // Ahora generamos el CSS optimizado
+  // PERF-6: factor the declarations every group shares into one rule. Tag
+  // defaults are ~300 properties each and overwhelmingly identical across tags,
+  // so emitting each group in full made the base block the largest CSS in the
+  // SVG (~33kb on a small card) — parsed again by every rasterization. The
+  // shared rule lists every tag, and each group's own rule re-declares only
+  // what differs; group rules come second, so same-specificity source order
+  // gives them the final word, exactly as the uncompressed output did.
+  const parsedGroups = [...groups.values()]
+
+  // The same logical-alias trim as getStyleKey applies to the defaults dumps.
+  for (const group of parsedGroups) {
+    const filtered = {}
+    for (const prop in group.styles) {
+      if (isRedundantLogicalProp(prop, group.styles)) continue
+      filtered[prop] = group.styles[prop]
+    }
+    group.styles = filtered
+  }
+
+  let common = null
+  for (const { styles } of parsedGroups) {
+    if (!common) {
+      common = new Map(Object.entries(styles))
+      continue
+    }
+    for (const [prop, value] of common) {
+      if (styles[prop] !== value) common.delete(prop)
+    }
+  }
+  common ??= new Map()
+
   let css = ''
-  for (let [styleBlock, tagList] of groups.entries()) {
-    css += `${tagList.join(',')} { ${styleBlock} }\n`
+  if (common.size && parsedGroups.length > 1) {
+    const allTags = parsedGroups.flatMap((group) => group.tagList)
+    const decls = [...common].map(([prop, value]) => `${prop}:${value};`).join('')
+    css += `${allTags.join(',')} { ${decls} }\n`
+  }
+  for (const { tagList, styles } of parsedGroups) {
+    const own = []
+    for (const prop in styles) {
+      if (parsedGroups.length > 1 && common.get(prop) === styles[prop]) continue
+      own.push(`${prop}:${styles[prop]};`)
+    }
+    if (own.length === 0) continue
+    css += `${tagList.join(',')} { ${own.join('')} }\n`
   }
 
   return css

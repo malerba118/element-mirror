@@ -22,9 +22,20 @@ import {
   hasCounters
 } from '../modules/counter.js'
 import { snapFetch } from './snapFetch.js'
+import { currentStyleEpoch, nodeStyleStamp, snapshotIsCurrent } from './styles.js'
 
 /** Weak memo for per-document preflight results keyed by a cheap style fingerprint */
 const __preflightMemo = new WeakMap()
+
+/**
+ * PERF-5: elements whose pseudo pass rendered nothing and touched no counter, so a repeat
+ * capture can skip their ::before/::after/::first-letter checks entirely. Those checks read
+ * half a dozen computed properties per pseudo per node, which on a card of fifty no-pseudo
+ * nodes is most of what the pseudo pass costs. Invalidated on the same events as the style
+ * snapshots (mutations near the node, animations, stylesheet/font/viewport changes) plus the
+ * shared age bound, since pseudo styles answer to the same cascade.
+ */
+const pseudoSkipCache = new WeakMap()
 
 /** Max number of CSS rules to scan across all sheets (keeps it fast).
  *  300 was too low for large apps (Tailwind, MUI) with 500+ utility rules — raised to 1000. */
@@ -456,6 +467,18 @@ export async function inlinePseudoElements(source, clone, sessionCache, options)
     return
   }
 
+  // A node whose pseudo pass rendered nothing last time and is still current renders
+  // nothing this time; only its children are worth visiting (PERF-5).
+  const verdict = pseudoSkipCache.get(source)
+  const skipOwn = !!verdict && snapshotIsCurrent(verdict.epoch, verdict.stamp, verdict.at, source)
+  // Whether this pass may be recorded as skippable: any clone mutation, counter
+  // propagation, or failure disqualifies it. The verdict is stamped with entry-time
+  // validity, so an invalidation racing the pass makes the stored verdict miss, not lie.
+  let cacheable = !skipOwn
+  const entry = cacheable
+    ? { epoch: currentStyleEpoch(), stamp: nodeStyleStamp(source), at: performance.now() }
+    : null
+
   // Sibling-counter overrides are per-capture state: they live on sessionCache (whose
   // lifetime is exactly one capture), not on a module global — a concurrently starting
   // capture used to wipe the shared global mid-traversal via an epoch bump.
@@ -470,7 +493,7 @@ export async function inlinePseudoElements(source, clone, sessionCache, options)
   }
   const counterCtx = sessionCache.__counterCtx
 
-  for (const pseudo of ['::before', '::after', '::first-letter']) {
+  for (const pseudo of skipOwn ? [] : ['::before', '::after', '::first-letter']) {
     try {
       const style = getStyle(source, pseudo)
       if (!style) continue
@@ -521,6 +544,7 @@ export async function inlinePseudoElements(source, clone, sessionCache, options)
         const rest = text.slice(first?.length || 0)
         if (!first || /[\uD800-\uDFFF]/.test(first)) continue
 
+        cacheable = false
         const span = document.createElement('span')
         span.textContent = first
         span.dataset.snapdomPseudo = '::first-letter'
@@ -540,6 +564,8 @@ const isNoExplicitContent =
   rawContent === '' || rawContent === 'none' || rawContent === 'normal'
 const { text: cleanContent, incs } =
   resolvePseudoContentAndIncs(source, pseudo, counterCtx, sessionCache.__siblingCounters)
+      // Counter increments feed sibling state a skipped pass would starve.
+      if (incs && incs.length) cacheable = false
 
       const bg = style.backgroundImage
       const bgColor = style.backgroundColor
@@ -576,6 +602,7 @@ const hasExplicitContent = !isNoExplicitContent && cleanContent !== ''
       const shouldRender =
         hasExplicitContent || hasBg || hasBgColor || hasBorder || hasTransform || hasLayoutBox ||
         hasShadow || hasOutline
+      if (shouldRender) cacheable = false
 
       if (!shouldRender) {
         // Aun si no renderizamos caja, si el pseudo tenía increments, propagar a hermanos
@@ -732,9 +759,12 @@ const hasExplicitContent = !isNoExplicitContent && cleanContent !== ''
         clone.appendChild(pseudoEl)
       }
     } catch (e) {
+      cacheable = false
       console.warn(`[snapdom] Failed to capture ${pseudo} for`, source, e)
     }
   }
+
+  if (cacheable && entry) pseudoSkipCache.set(source, entry)
 
   // Recurse – use nodeMap (clone→source) for alignment instead of index,
   // because deepClone filters out NO_CAPTURE_TAGS (script, link, etc.),

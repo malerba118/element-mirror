@@ -10,6 +10,7 @@ import { emulateBackdropFilters } from '../modules/backdropFilter.js'
 import { ligatureIconToImage } from '../modules/iconFonts.js'
 import { idle, collectUsedTagNames, generateDedupedBaseCSS, isSafari, getStyle } from '../utils/index.js'
 import { embedCustomFonts, collectFontUsage, ensureFontsReady } from '../modules/fonts.js'
+import { beginStyleWindow, currentStyleEpoch, nodeStyleStamp, snapshotIsCurrent } from '../modules/styles.js'
 import { cache, applyCachePolicy } from '../core/cache.js'
 import { lineClampTree } from '../modules/lineClamp.js'
 import { runHook, getGlobalPlugins, normalizePlugin } from './plugins.js'
@@ -118,6 +119,10 @@ function checkBurstAdvice(element) {
 export async function captureDOM(element, options) {
   if (!element) throw new Error('Element cannot be null or undefined')
   applyCachePolicy(options.cache)
+  // Fold pending mutations into the per-node style stamps and invalidate the targets of
+  // running animations/transitions, so this capture reuses every snapshot it may and none
+  // it may not (PERF-5 in modules/styles.js).
+  beginStyleWindow(element)
   // cache.session is reassigned at every capture start: snapshot THIS capture's maps in the
   // same synchronous tick, before any await, or a concurrently started capture swaps them
   // and both captures share one nodeMap (double scroll-compensation, cross-contaminated CSS).
@@ -263,14 +268,36 @@ export async function captureDOM(element, options) {
 
   await Promise.all([assetsPhase, fontsPhase])
 
-  const usedTags = collectUsedTagNames(state.clone).sort()
-  const tagKey = usedTags.join(',')
+  // PERF-6: the set of tags under an element only changes when nodes are added
+  // or removed, and any such mutation bumps the root's own style stamp (its
+  // ancestors are always invalidated), so a current stamp means the walk from
+  // last capture still answers. Keyed per exclude/filter shape, since those
+  // change what the clone contains.
+  let tagKey
+  const tagKeyOptions = `${JSON.stringify(options.exclude ?? null)}|${typeof options.filter}`
+  const tagHint = cache.tagKeys.get(element)
+  if (
+    tagHint &&
+    tagHint.options === tagKeyOptions &&
+    snapshotIsCurrent(tagHint.epoch, tagHint.stamp, tagHint.at, element)
+  ) {
+    tagKey = tagHint.tagKey
+  } else {
+    tagKey = collectUsedTagNames(state.clone).sort().join(',')
+    cache.tagKeys.set(element, {
+      epoch: currentStyleEpoch(),
+      stamp: nodeStyleStamp(element),
+      at: performance.now(),
+      options: tagKeyOptions,
+      tagKey,
+    })
+  }
   if (cache.baseStyle.has(tagKey)) {
     baseCSS = cache.baseStyle.get(tagKey)
   } else {
     await new Promise((resolve) => {
       idle(() => {
-        baseCSS = generateDedupedBaseCSS(usedTags)
+        baseCSS = generateDedupedBaseCSS(tagKey.split(','))
         cache.baseStyle.set(tagKey, baseCSS)
         resolve()
       }, { fast })
