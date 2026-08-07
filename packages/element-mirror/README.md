@@ -45,11 +45,15 @@ has something to draw, the way an image does before it loads. This is most
 noticeable on mirrors that appear in response to an interaction, where that one
 empty frame reads as a flicker.
 
-The first frame also waits, up to a few seconds, for a source that is still
-settling — images mid-fetch, a video buffering toward its first frame, webfonts
-loading — rather than baking placeholders into it. A live mirror would heal
-from that on the `load` event anyway; a `paused` mirror keeps its single frame
-forever, so the frame it keeps is taken after the pixels arrive.
+When the source is itself an `<img>` or `<video>` still fetching, the first
+frame also waits (up to a few seconds) for the pixels rather than capturing
+nothing — they are the entire capture, and a `paused` mirror keeps its single
+frame forever. That wait is deliberately shallow: a composite source — a card
+with images inside — is captured as it currently looks, loading states
+included, because mirroring an interface means mirroring what it shows. A live
+mirror over such a source heals on each image's `load` event; to freeze a
+composite only once its media has landed, run the mirror live and set `paused`
+when your own readiness signal fires.
 
 ### Naming a source
 

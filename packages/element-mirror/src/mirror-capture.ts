@@ -69,15 +69,15 @@ const COST_WEIGHT = 0.2
 const RETRY_MS = 250
 
 /**
- * How long the first frame will wait for a source that is still settling.
+ * How long the first frame will wait for a source that is itself still
+ * loading its pixels (see mediaStillLoading).
  *
- * A first capture taken while an image is fetching or a video is buffering
- * bakes the loading state into the frame, and a paused mirror keeps that one
- * frame forever — its single-frame subscription retires on painting, so the
- * `load` event that heals a live mirror arrives with no one listening. Waiting
- * is bounded so a lazy image below the fold or a hostile network cannot hold a
- * mirror blank indefinitely; the bound matches the engine's own fetch timeout,
- * past which it substitutes placeholders anyway.
+ * A first capture of a mid-fetch <img> or <video> is a picture of nothing,
+ * and a paused mirror keeps that one frame forever — its single-frame
+ * subscription retires on painting, so the `load` event that heals a live
+ * mirror arrives with no one listening. Waiting is bounded so a hostile
+ * network cannot hold a mirror blank indefinitely; the bound matches the
+ * engine's own fetch timeout, past which it substitutes placeholders anyway.
  */
 const SETTLE_PATIENCE_MS = 3000
 
@@ -277,32 +277,33 @@ function cannotDrawVideo(video: HTMLVideoElement) {
 }
 
 /**
- * Whether the source still has pixels on their way to it: an image fetching, a
- * video loading toward its first frame, webfonts swapping in. Capturing now
- * would bake the loading state — a placeholder box, a missing frame, fallback
- * metrics — into the result.
+ * Whether the source is itself a media element whose pixels are still on the
+ * way: an image fetching, a video loading toward its first frame. Capturing
+ * now would bake the loading state into the result, and the media's pixels
+ * are the entire capture, so there is nothing worth taking yet.
  *
- * An image with a broken src does not hold this true forever: browsers mark an
- * image `complete` when it errors, not only when it loads. Videos count only
- * while actively fetching, so a `preload="none"` poster or a video with no
- * source does not read as settling.
+ * Deliberately shallow. A composite source — a card with images inside — is
+ * captured as it currently looks, loading states included: mirroring an
+ * interface means mirroring what the interface shows, and crawling
+ * descendants would turn "capture now" into "capture whenever things the
+ * caller cannot see finish loading". A caller who wants a composite captured
+ * only once its media has landed decides readiness itself: run the mirror
+ * live and set `paused` when its own signal fires.
+ *
+ * An image with a broken src does not hold this true forever: browsers mark
+ * an image `complete` when it errors, not only when it loads. A video counts
+ * only while actively fetching, so a `preload="none"` poster or a video with
+ * no source does not read as loading.
  */
-function stillSettling(target: Element) {
-  const images = selfAndDescendants(target, 'img') as HTMLImageElement[]
-  if (images.some((image) => !image.complete)) return true
-
-  const videos = selfAndDescendants(target, 'video') as HTMLVideoElement[]
-  if (
-    videos.some(
-      (video) =>
-        cannotDrawVideo(video) &&
-        video.networkState === video.NETWORK_LOADING
+function mediaStillLoading(element: Element) {
+  if (element instanceof HTMLImageElement) return !element.complete
+  if (element instanceof HTMLVideoElement) {
+    return (
+      cannotDrawVideo(element) &&
+      element.networkState === element.NETWORK_LOADING
     )
-  ) {
-    return true
   }
-
-  return document.fonts?.status === 'loading'
+  return false
 }
 
 /**
@@ -461,17 +462,16 @@ async function capture(
   const rect = element.getBoundingClientRect()
   if (rect.width === 0 || rect.height === 0) return now + RETRY_MS
 
-  // The first frame is worth a short wait. While the source is still settling
-  // — an image fetching, a video buffering toward its first frame, webfonts
-  // loading — a capture would bake the loading state into the frame, and for a
-  // paused mirror that one frame is final: its subscription retires on
-  // painting, so the `load` that heals a live mirror finds no one listening.
-  // Only the first frame waits; afterwards the last good frame stays up and
-  // the repaint listeners re-capture when the pixels arrive.
+  // The first frame of a media element is worth a short wait: while the
+  // source itself is an <img> or <video> still fetching, its pixels are the
+  // whole capture, and for a paused mirror that one frame is final — its
+  // subscription retires on painting, so the `load` that heals a live mirror
+  // finds no one listening. Only the first frame waits, and only for the
+  // source's own pixels; a composite source is captured as it looks now.
   if (
     state.timeline.length === 0 &&
     now - state.wantedSince < SETTLE_PATIENCE_MS &&
-    stillSettling(element)
+    mediaStillLoading(element)
   ) {
     return now + RETRY_MS
   }

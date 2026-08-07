@@ -5,9 +5,12 @@ import * as React from 'react'
 import { ElementMirror } from '@frostin/element-mirror'
 
 /**
- * Exists for `.perf/settle.mjs`: paused mirrors over sources whose images are
- * still loading — sized, so the zero-size guard cannot save them. The one
- * frame a paused mirror keeps must wait for the pixels.
+ * Exists for `.perf/settle.mjs`, asserting both halves of the first-frame
+ * rule. `single` mirrors an <img> directly: its one frame must wait for the
+ * pixels. `nested` mirrors a div whose images load slower than the engine's
+ * own fetch timeout: the wait is deliberately shallow, so its one frame must
+ * arrive without waiting for them — an interface is captured as it looks,
+ * loading states included.
  */
 export default function SettleTest() {
   const single = React.useRef<HTMLImageElement>(null)
@@ -30,14 +33,14 @@ export default function SettleTest() {
         <div ref={nested} style={{ display: 'flex', gap: 8 }}>
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="/api/slow-image?ms=1000&which=1"
+            src="/api/slow-image?ms=5500&which=1"
             alt=""
             width={160}
             height={120}
           />
           {/* eslint-disable-next-line @next/next/no-img-element */}
           <img
-            src="/api/slow-image?ms=2200&which=2"
+            src="/api/slow-image?ms=5600&which=2"
             alt=""
             width={160}
             height={120}

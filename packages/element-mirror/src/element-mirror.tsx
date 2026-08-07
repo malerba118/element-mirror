@@ -93,10 +93,12 @@ export type ElementMirrorProps = Omit<
    * Suspends capturing while preserving the last painted frame.
    *
    * A mirror paused before it has a frame still captures one, so it holds a
-   * still of the source rather than nothing. Since that one frame is kept
-   * forever, it waits (briefly) for the source to settle — images still
-   * fetching, a video buffering, webfonts loading — so it depicts the source
-   * rather than the source's loading state.
+   * still of the source rather than nothing. When the source is itself an
+   * <img> or <video> still fetching, that one frame waits (briefly) for the
+   * pixels — they are the entire capture. A composite source is captured as
+   * it currently looks, loading states included; a caller who wants it
+   * captured only once its media has landed should run the mirror live and
+   * set `paused` on its own readiness signal.
    *
    * @default false
    */

@@ -57,7 +57,7 @@ wearing a perf win's clothes.
 
 plus focused checks: dirty-detection (`dirty.mjs`), idle cost (`idle.mjs`),
 delay accuracy (`lag.mjs`), pause semantics (`paused.mjs`), first-frame
-settling over loading images (`settle.mjs`), drag ghosts (`drag.mjs`),
+waiting on loading media sources (`settle.mjs`), drag ghosts (`drag.mjs`),
 overflow fidelity (`overflow.mjs`), page-wide smoke (`smoke.mjs`), and
 per-section cost attribution (`cost.mjs`, `bench.mjs`).
 All need the demo dev server up. `MIRROR_SNAPDOM=npm` points `snapdom.mjs` at

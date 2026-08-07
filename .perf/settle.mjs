@@ -1,10 +1,15 @@
 import { chromium } from 'playwright'
 
 /**
- * Asserts the first-frame settle guard: a paused mirror over still-loading
- * images must hold no frame while they fetch (not a placeholder it would keep
- * forever), then hold a frame containing the real pixels of every image.
- * Drives /settle-test, which exists for this script.
+ * Asserts both halves of the first-frame rule against /settle-test, which
+ * exists for this script.
+ *
+ * `single` mirrors an <img> directly: its one frame must wait for the pixels
+ * (no frame while the image fetches, real pixels once it lands). `nested`
+ * mirrors a div whose images load slower than the engine's own fetch timeout:
+ * the wait is deliberately shallow, so its one frame must arrive WITHOUT
+ * waiting for them — an interface is captured as it looks, loading states
+ * included, and app-defined readiness belongs to the app.
  *
  *   node .perf/settle.mjs
  *
@@ -32,7 +37,7 @@ const inspect = () =>
           .getContext('2d')
           .getImageData(0, 0, canvas.width, canvas.height)
         // Count pixels with alpha in the left and right halves separately, so
-        // a nested frame holding img-1 but missing img-2 is caught.
+        // a frame holding one image but missing the other is caught.
         let left = 0
         let right = 0
         const rowBytes = canvas.width * 4
@@ -47,38 +52,50 @@ const inspect = () =>
       }
       report[which] = {
         visibility: style?.visibility ?? 'absent',
-        bitmap: canvas ? `${canvas.width}x${canvas.height}` : null,
         inkedHalves,
       }
     }
-    const images = Array.from(document.querySelectorAll('img')).map(
+    report.imagesComplete = Array.from(document.querySelectorAll('img')).map(
       (img) => img.complete
     )
-    return { ...report, imagesComplete: images }
+    return report
   })
 
-// While the images fetch: mirrors must be frameless (hidden, no bitmap).
+// 600ms in: the single image (1.5s) is still fetching, so its mirror must be
+// frameless — not holding a placeholder it would keep forever.
 await page.waitForTimeout(600)
-console.log('during load:', JSON.stringify(await inspect()))
+const during = await inspect()
+console.log('during load:', JSON.stringify(during))
 
-// After the slowest image (2.2s) plus a couple retry beats.
-await page.waitForTimeout(4000)
-const after = await inspect()
-console.log('after load: ', JSON.stringify(after))
+// 4.3s in: the single image landed at 1.5s; the nested images (5.5s) are
+// still fetching, but the engine's 3s fetch timeout has passed, so the
+// nested mirror must already hold its frame of the loading interface.
+await page.waitForTimeout(3700)
+const midway = await inspect()
+console.log('midway:     ', JSON.stringify(midway))
 
 await browser.close()
 
 const failures = []
-for (const which of ['single', 'nested']) {
-  const state = after[which]
-  if (state.visibility !== 'visible') failures.push(`${which}: still hidden`)
-  const halves = state.inkedHalves ?? { left: 0, right: 0 }
-  if (halves.left === 0 || halves.right === 0) {
-    failures.push(`${which}: frame missing pixels (${halves.left}/${halves.right})`)
-  }
+if (during.single.visibility !== 'hidden') {
+  failures.push('single: captured before its image landed')
+}
+const singleInk = midway.single.inkedHalves ?? { left: 0, right: 0 }
+if (midway.single.visibility !== 'visible' || singleInk.left === 0 || singleInk.right === 0) {
+  failures.push(
+    `single: no complete frame after load (${midway.single.visibility}, ${singleInk.left}/${singleInk.right})`
+  )
+}
+if (midway.imagesComplete[1] || midway.imagesComplete[2]) {
+  failures.push('nested: test images loaded too soon to prove anything')
+}
+if (midway.nested.visibility !== 'visible') {
+  failures.push('nested: waited for descendants — the guard is meant to be shallow')
 }
 if (failures.length > 0) {
   console.error('FAIL:', failures.join('; '))
   process.exit(1)
 }
-console.log('ok: paused mirrors waited for the images and kept complete frames')
+console.log(
+  'ok: a media source waited for its pixels; a composite captured its loading state'
+)
