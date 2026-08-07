@@ -10,6 +10,7 @@ import { SizingShowcase } from '@/components/demo/sizing-showcase'
 import { SnapshotShowcase } from '@/components/demo/snapshot-showcase'
 import { ThemeToggle } from '@/components/demo/theme-toggle'
 import { VideoBackdropShowcase } from '@/components/demo/video-backdrop-showcase'
+import { MirrorEngineSwitch } from '@/components/mirror-engine-switch'
 import { Badge } from '@/components/ui/badge'
 import { Separator } from '@/components/ui/separator'
 
@@ -22,6 +23,7 @@ export default function Home() {
             ElementMirror
           </span>
           <div className="flex items-center gap-3">
+            <MirrorEngineSwitch />
             <CaptureStatsBadge />
             <ThemeToggle />
           </div>
@@ -38,11 +40,11 @@ export default function Home() {
           </h1>
           <p className="text-base text-muted-foreground">
             <Token>ElementMirror</Token> repaints another element into a{' '}
-            <Token>&lt;canvas&gt;</Token> a few times a second. The canvas
-            sizes like an <Token>&lt;img&gt;</Token> of the source: leave it
-            alone and it takes the source&apos;s own size, give it a width and
-            it keeps the ratio, give it both dimensions and{' '}
-            <Token>objectFit</Token> decides between cropping and letterboxing.
+            <Token>&lt;canvas&gt;</Token> a few times a second. The canvas sizes
+            like an <Token>&lt;img&gt;</Token> of the source: leave it alone and
+            it takes the source&apos;s own size, give it a width and it keeps
+            the ratio, give it both dimensions and <Token>objectFit</Token>{' '}
+            decides between cropping and letterboxing.
           </p>
         </div>
 
@@ -53,8 +55,8 @@ export default function Home() {
           description={
             <>
               Every prop, wired to a control. The snippet underneath is the
-              component rendering on the right, and its{' '}
-              <Token>source</Token> is the ref held by the card on the left.
+              component rendering on the right, and its <Token>source</Token> is
+              the ref held by the card on the left.
             </>
           }
         >
@@ -133,8 +135,8 @@ export default function Home() {
           title="Frame rate is the cost dial"
           description={
             <>
-              <Token>fps</Token> trades smoothness for CPU per mirror, and
-              a group runs at its fastest member rather than the sum. Mirrors
+              <Token>fps</Token> trades smoothness for CPU per mirror, and a
+              group runs at its fastest member rather than the sum. Mirrors
               scrolled out of view stop capturing on their own, as do mirrors on
               a hidden tab, and the loop backs off on its own if captures turn
               out to be expensive.

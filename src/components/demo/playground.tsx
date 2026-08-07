@@ -103,7 +103,7 @@ export function Playground() {
             </CardAction>
           </CardHeader>
           <CardContent className="flex min-h-56 items-center justify-center py-2">
-            <PlayerSource ref={sourceRef} />
+            <PlayerSource id="playground-source" ref={sourceRef} />
           </CardContent>
         </Card>
 

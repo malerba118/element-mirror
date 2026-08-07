@@ -193,6 +193,17 @@
   animation: demo-ghost-in 90ms ease-out;
 }
 
+/* The skeleton sweep in the fidelity gallery: a background position moving
+   under a fixed box, which is a different thing to animate than a transform. */
+@keyframes gallery-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+
 /* Makes a transparent capture (background: null) readable. */
 .checkerboard {
   background-color: #fff;

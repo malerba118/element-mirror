@@ -1,4 +1,9 @@
-import { screenshot } from '@screenshot'
+import {
+  captureWith,
+  DEFAULT_MIRROR_ENGINE,
+  MIRROR_ENGINES,
+  type MirrorEngine,
+} from './mirror-engines'
 
 /**
  * Shared capture scheduling for every mirror on the page.
@@ -39,8 +44,24 @@ import { screenshot } from '@screenshot'
  * away without the subscription knowing.
  */
 
-/** Share of wall-clock time the capture loop is allowed to consume. */
-export const CAPTURE_DUTY_CYCLE = 0.2
+/**
+ * Share of wall-clock time the capture loop is allowed to consume.
+ *
+ * This, and not the `fps` a mirror asks for, is what sets the rate it gets:
+ * captures are spaced by cost divided by this, so ten milliseconds a capture at
+ * 20% is fifty milliseconds apart however fast the mirror asked to run.
+ *
+ * Which makes the number self-fulfilling in a way worth knowing about. A
+ * capture pays for the style and layout the source invalidated since the last
+ * one, so capturing more often makes each one cheaper: the same card costs 14ms
+ * a capture at 15 frames a second and 5.6ms at 40. Throttling on the cost
+ * measured while throttled therefore settles at a pessimistic rate, and the
+ * cost it settled on overstates what the rate it settled at would have taken.
+ * 35% is what one source at 40fps actually needs, measured by
+ * `.perf/ceiling.mjs`; each further source needs its own share of the thread,
+ * while mirrors of the same source are free.
+ */
+export const CAPTURE_DUTY_CYCLE = 0.35
 
 /** Weight of the newest capture in a source's running cost, per capture. */
 const COST_WEIGHT = 0.2
@@ -165,6 +186,58 @@ interface SourceState {
 
 const subscribers = new Map<MirrorSubscriber, SubscriberState>()
 const sources = new Map<Element, SourceState>()
+
+/**
+ * Which renderer captures. One setting for the page rather than one per mirror,
+ * since mirrors of an element share its captures and two engines over one
+ * element would mean capturing it twice.
+ */
+let engine: MirrorEngine | null = null
+
+const engineListeners = new Set<() => void>()
+
+/**
+ * The engine to capture with, taken from the address on first use.
+ *
+ * Any page can be opened on an engine with `?engine=snapdom`, which is what
+ * lets a page with no switch on it, or a script driving one, choose without a
+ * click. Resolved lazily and never remembered from the server, where there is
+ * no address to read.
+ */
+function currentEngine(): MirrorEngine {
+  if (engine) return engine
+  if (typeof window === 'undefined') return DEFAULT_MIRROR_ENGINE
+
+  const asked = new URLSearchParams(window.location.search).get('engine')
+  engine = MIRROR_ENGINES.includes(asked as MirrorEngine)
+    ? (asked as MirrorEngine)
+    : DEFAULT_MIRROR_ENGINE
+  return engine
+}
+
+export function getMirrorEngine() {
+  return currentEngine()
+}
+
+export function subscribeToMirrorEngine(listener: () => void) {
+  engineListeners.add(listener)
+  return () => {
+    engineListeners.delete(listener)
+  }
+}
+
+/**
+ * Swaps the renderer and asks for a fresh frame everywhere. Frames already
+ * taken are left in place so that nothing goes blank between the two: they are
+ * replaced as the new ones arrive, and age out of the delay timelines.
+ */
+export function setMirrorEngine(next: MirrorEngine) {
+  if (next === currentEngine()) return
+  engine = next
+  for (const state of sources.values()) state.dirty = true
+  kick()
+  for (const listener of engineListeners) listener()
+}
 
 function stateFor(element: Element, now: number) {
   let state = sources.get(element)
@@ -432,11 +505,7 @@ async function capture(
   try {
     // Always captured transparent; each mirror applies its own background at
     // blit time, so background does not fragment the sharing.
-    await screenshot.canvas(element, {
-      canvas,
-      scale: pixelRatio,
-      backgroundColor: null,
-    })
+    await captureWith(currentEngine(), element, canvas, pixelRatio)
   } catch (error) {
     if (process.env.NODE_ENV !== 'production') {
       console.warn('ElementMirror: capture failed', element, error)

@@ -34,16 +34,16 @@ PORT=3000 npm run dev
 
 ## Props
 
-| Prop | Type | Default | Notes |
-| --- | --- | --- | --- |
-| `source` | `Element \| RefObject<Element \| null> \| string` | — | The element to mirror, as an element, a ref, or a CSS selector. |
-| `fps` | `number` | `12` | Maximum captures per second, up to the display refresh rate. |
-| `delay` | `number` | `0` | Milliseconds behind the source to run. |
-| `pixelRatio` | `number` | `devicePixelRatio` | Bitmap pixels captured per CSS pixel. |
-| `objectFit` | `ObjectFit` | `'fill'` | Applies once the canvas has both a width and a height. |
-| `objectPosition` | `string` | `'center'` | Alignment when `objectFit` crops or letterboxes. |
-| `background` | `string \| null` | `null` | Fill behind the element. `null` keeps transparency. |
-| `paused` | `boolean` | `false` | Stop capturing and hold a frame. Paused before it has one, a mirror captures a single frame to hold. |
+| Prop             | Type                                              | Default            | Notes                                                                                                |
+| ---------------- | ------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------- |
+| `source`         | `Element \| RefObject<Element \| null> \| string` | —                  | The element to mirror, as an element, a ref, or a CSS selector.                                      |
+| `fps`            | `number`                                          | `12`               | Maximum captures per second, up to the display refresh rate.                                         |
+| `delay`          | `number`                                          | `0`                | Milliseconds behind the source to run.                                                               |
+| `pixelRatio`     | `number`                                          | `devicePixelRatio` | Bitmap pixels captured per CSS pixel.                                                                |
+| `objectFit`      | `ObjectFit`                                       | `'fill'`           | Applies once the canvas has both a width and a height.                                               |
+| `objectPosition` | `string`                                          | `'center'`         | Alignment when `objectFit` crops or letterboxes.                                                     |
+| `background`     | `string \| null`                                  | `null`             | Fill behind the element. `null` keeps transparency.                                                  |
+| `paused`         | `boolean`                                         | `false`            | Stop capturing and hold a frame. Paused before it has one, a mirror captures a single frame to hold. |
 
 Anything else is forwarded to the canvas, and `ref` points at the canvas.
 
@@ -69,9 +69,11 @@ so a ref and a selector naming the same node still share a single capture.
 makes trails and echoes possible:
 
 ```tsx
-{[0, 250, 500, 750].map((delay) => (
-  <ElementMirror key={delay} source="#card" fps={20} delay={delay} />
-))}
+{
+  [0, 250, 500, 750].map((delay) => (
+    <ElementMirror key={delay} source="#card" fps={20} delay={delay} />
+  ));
+}
 ```
 
 Captures accumulate in a per-source timeline, and each mirror is drawn the
@@ -189,7 +191,7 @@ stops a plain click from lifting anything:
 
 ```tsx
 // hidden while the press might still be a click, capturing the whole time
-<div className={active ? undefined : 'opacity-0'}>
+<div className={active ? undefined : "opacity-0"}>
   <ElementMirror source={drag} sizing="source" />
 </div>
 ```
@@ -202,9 +204,9 @@ On the demo card a 2.5° tilt was enough to blur the type, and doubling
 translation between device pixels costs sharpness the same way:
 
 ```tsx
-const density = window.devicePixelRatio || 1
-const snap = (value: number) => Math.round(value * density) / density
-ghost.style.transform = `translate3d(${snap(x)}px, ${snap(y)}px, 0)`
+const density = window.devicePixelRatio || 1;
+const snap = (value: number) => Math.round(value * density) / density;
+ghost.style.transform = `translate3d(${snap(x)}px, ${snap(y)}px, 0)`;
 ```
 
 Upright and snapped, the ghost measures within half a percent of the element it
@@ -289,6 +291,7 @@ landed on, and each bucket is serviced once:
   source wrong until something else happens to it. The insurance costs about one
   capture per second per still source, and a mirror that has not painted yet
   always captures, so joining a static source still gives it a first frame.
+
 - **Delayed mirrors cost history, not captures.** Captures accumulate in a
   per-source timeline and each mirror is drawn the frame matching its own
   `delay`, which is why a trail of eight ghosts is still one capture per frame.
@@ -300,13 +303,67 @@ landed on, and each bucket is serviced once:
   sits. Those captures are skipped, so mirrors hold their last frame exactly as
   the video element does, and capture again as soon as it recovers.
 - **The loop backs off.** Each capture is timed, and the element's next capture
-  is delayed so capturing stays under `CAPTURE_DUTY_CYCLE` (20%) of wall-clock
+  is delayed so capturing stays under `CAPTURE_DUTY_CYCLE` (35%) of wall-clock
   time. An expensive source degrades to a lower frame rate instead of saturating
   the main thread. The judgement runs on a rolling average of the last few
   captures rather than the last one, because a capture is timed across an `await`
   and so measures whatever else the main thread did meanwhile. Dropping a frame
   from a rate the source can sustain is worse than answering a real slowdown a
   few frames late.
+
+  This share, rather than the `fps` a mirror asks for, is what decides the rate
+  it gets, and it is worth knowing that the two interact: a capture pays for the
+  style and layout its source invalidated since the last one, so capturing more
+  often makes each capture cheaper. A share set low therefore settles at a rate
+  lower than the source could hold, on a cost that would not have applied at the
+  higher rate.
+
+### What a capture costs, and what caps the rate
+
+Measured on this machine with SnapDOM, which is the default engine. Costs differ
+per source, so a number here always names the one it was measured on: the
+playground's player card (`#playground-source`, 46 nodes, video and a CSS
+animation) and the delay showcase's card (`#delay-source`, 11 nodes).
+
+| source               | one capture | what 40fps of it costs |
+| -------------------- | ----------- | ---------------------- |
+| `#delay-source`      | 5.6ms       | 23% of the thread      |
+| `#playground-source` | 14ms        | 57% of the thread      |
+
+Which sets what to expect from `CAPTURE_DUTY_CYCLE`: at 35% the player card
+settles around 23 frames a second, and 40 would need roughly 60%. Two things are
+worth knowing before changing that number, both open leads rather than settled
+work:
+
+- **The loop over-charges itself on a busy page.** The stats badge reports 30ms a
+  capture for the player card where `.perf/snapdom.mjs` measures 14ms for the
+  same element at the same rate. A capture is timed across an `await`, so
+  whatever else the main thread does meanwhile — the other mirrors on the page,
+  React, the video — is billed to it, and the loop then throttles on a cost that
+  is nearly double the real one. Fixing the estimate is likely worth more than
+  raising the share, and would make the share mean what it says. A median of
+  recent captures rather than a mean would be the cheap version.
+- **The demo page captures many sources at once.** Each one needs its own slice
+  of the thread; mirrors of the _same_ source are free, since they share captures.
+  A page showing one source at 40fps is a different proposition from this one.
+
+#### What was already tried on the engine
+
+Making a capture cheaper by patching SnapDOM was investigated and largely ruled
+out — a capture of a live source is rasterize-bound, not style-bound, and its own
+options are worth nothing here. `vendor/README.md` has the numbers, including a
+per-element style cache that halved the property reads and made captures slower.
+Don't re-run that experiment; the remaining headroom is in this file, not that
+one.
+
+The harness, which is what to reach for before optimizing anything:
+
+| script               | answers                                                           |
+| -------------------- | ----------------------------------------------------------------- |
+| `.perf/snapdom.mjs`  | what a capture costs, in which half, and what it asks the DOM for |
+| `.perf/profile.mjs`  | which functions, plus Chrome's recalc and layout counters         |
+| `.perf/ceiling.mjs`  | what rate each engine can hold on a given source                  |
+| `.perf/fidelity.mjs` | whether a change altered any pixels, against the gallery          |
 
 ### Rate
 

@@ -1,0 +1,9 @@
+{
+  "name": "@zumer/snapdom",
+  "version": "2.23.1",
+  "type": "module",
+  "main": "./src/index.js",
+  "types": "./types/snapdom.d.ts",
+  "license": "MIT",
+  "private": true
+}

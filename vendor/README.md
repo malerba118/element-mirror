@@ -1,5 +1,112 @@
 # Vendored dependencies
 
+## `snapdom`
+
+`vendor/snapdom` is a copy of [SnapDOM][snapdom]'s source, forked for the same
+reason as the renderer below it: it is the engine the mirror runs on, so its cost
+and its mistakes should be editable here. `src/lib/mirror-engines.ts` imports it
+as `@snapdom`, which `tsconfig.json` maps to `vendor/snapdom/src/index.js`, and
+Next compiles it like any other file in the repo.
+
+Forked from:
+
+- Version `2.23.1`
+- Tag `v2.23.1`, commit `4ef7f1fe7b2cf80d7fdf433d8d87364e9b8c6b35`
+- Upstream path `src/`
+
+`LICENSE`, `README.md`, `CHANGELOG.md`, `types/`, `esbuild.config.mjs` and the
+test suite are upstream's, kept as they were. `src/index.d.ts` and
+`package.json` are ours: the first points TypeScript at upstream's types for the
+`@snapdom` alias, the second names the version the build banner reads.
+
+The published `@zumer/snapdom` is still a dependency at the same version, but
+nothing in `src/` imports it — `.perf` loads it as the unforked baseline, which
+is what `MIRROR_SNAPDOM=npm` selects.
+
+### Local changes
+
+- **The computed declaration's length is read once per element rather than once
+  per property.** A live `CSSStyleDeclaration` answers `length` by going back
+  into style, and the property loop asked on every iteration: about fifteen
+  thousand round trips a capture on a card of fifty nodes. Worth a few tenths of
+  a millisecond, no more, since the work per property is much larger than the
+  read.
+
+### Where its time goes
+
+`.perf/snapdom.mjs` prices the options and takes a capture apart. On the demo's
+player card, 46 nodes at 2x, driven at 40 frames a second:
+
+- **Ten of the thirteen milliseconds are SnapDOM's own JavaScript**, and two and
+  a half are Chrome rasterizing the SVG.
+- **Those ten milliseconds are one thing:** reading every computed property of
+  every node, which costs 9.9ms done by hand over the same subtree. Everything
+  else SnapDOM does adds up to a few tenths.
+- **The cost is the reads, not a style recalc.** Reading the subtree a second
+  time, against styles it has just made valid, is no cheaper. So it scales with
+  how much is read: half the properties is 5.7ms, a quarter is 2.9ms, and only
+  the nodes with a running animation is 1.5ms.
+- **Its own options are worth nothing here.** `fast` saves half a millisecond,
+  `cache: 'full'` is slower than the default, `cache: 'disabled'` costs four
+  times as much, `preCache` makes no difference, and `embedFonts: false` saves
+  1.7ms that the text cannot afford.
+
+### Reading less does not make it faster
+
+SnapDOM keeps style snapshots between captures, in `snapshotCache` in
+`src/modules/styles.js`, but `bumpEpoch` throws away every element's snapshot
+whenever anything in the document mutates. On a live page something always just
+did, so on the demo page the cache never hits and every capture re-reads
+everything, while on the quiet gallery it hits and captures are already cheap.
+
+Narrowing that invalidation to the elements a mutation can actually restyle was
+built and then taken out again, because it did not pay. It worked: per-element
+marks with an ancestor walk for inheritance, following siblings for `~` and `+`,
+elements with a running animation re-read every capture, and a sweep twice a
+second for what cannot be seen at all — `:has()`, a stylesheet edited through
+CSSOM, a Web Animation started from script. On the player card 40 of 46 nodes
+were reused per capture, the six misses were exactly the animating bars and the
+clock, and the SVG came out byte-identical to upstream's.
+
+It halved the property reads, 11,713 a capture down to 6,257, and the capture
+got **slower**: 21ms against 14ms. Three things came out of chasing that, and
+they are the reason not to try again from this direction:
+
+- **Half the reads are not the snapshot.** About a hundred reads per node per
+  capture come from the pseudo-element pass in `src/modules/pseudo.js`, which
+  has no cache and is not what this invalidation touched.
+- **Chrome caches the rasterization by url.** The same SVG data url takes 13.2ms
+  to draw the first time and 1.2ms after. Upstream produced a byte-identical
+  capture about half the time on this card and got that discount; the cached
+  path produced a unique one every time and paid full price. That single effect
+  is larger than every style read in the capture.
+- **`getAnimations()` flushes style to answer.** Asking per capture, which is the
+  obvious way to keep animated elements live, cost more than it saved. Reading
+  `animation-name` from the snapshot that was being taken anyway is free, and
+  only script-driven animations need the real thing.
+
+So a capture of a live source is rasterize-bound rather than style-bound, and
+`.perf/profile.mjs` is the tool that says so: it reports Chrome's own recalc and
+layout counters next to JavaScript self time, because the work that matters here
+is charged to `(program)` and no JavaScript profile will name it.
+
+[snapdom]: https://github.com/zumerlab/snapdom
+
+### Diffing against upstream
+
+```bash
+git clone --filter=blob:none https://github.com/zumerlab/snapdom.git /tmp/snapdom
+git -C /tmp/snapdom checkout v2.23.1
+diff -ru /tmp/snapdom/src vendor/snapdom/src
+```
+
+### Running the tests
+
+Upstream's suite is vendored with the source but is not wired up yet: it runs
+under vitest browser mode with `@zumer/snapdiff` for its visual baselines,
+neither of which this repo has configured. Until it is, a change here is checked
+with `.perf/fidelity.mjs` against the gallery and `.perf/snapdom.mjs` for cost.
+
 ## `screenshot`
 
 `vendor/screenshot` is a copy of the [`@renoun/screenshot`][upstream] source,

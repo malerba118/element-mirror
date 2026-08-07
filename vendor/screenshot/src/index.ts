@@ -951,31 +951,46 @@ async function renderToCanvas(
     if (rootClipsOverflow) return rootRect
 
     try {
-      const descendants = Array.from(element.querySelectorAll('*'))
-      if (!descendants.length) return rootRect
-
       let minLeft = rootRect.left
       let minTop = rootRect.top
       let maxRight = rootRect.right
       let maxBottom = rootRect.bottom
 
-      for (let i = 0; i < descendants.length; i++) {
-        const node = descendants[i]
+      // Only content that is actually on show can grow the capture. Walking
+      // down rather than over every descendant at once means a subtree that an
+      // ancestor already clips is never asked how far it reaches: the rows
+      // scrolled out of a list are still laid out below it, and taking their
+      // bounds would stretch the capture to the whole list. The element doing
+      // the clipping is measured itself, since its own shadow still spills.
+      //
+      // A descendant positioned against a containing block above the clipping
+      // element escapes the clip in the browser but is left out here, which is
+      // the one case this walk gives away.
+      const stack: Element[] = Array.from(element.children)
+      while (stack.length > 0) {
+        const node = stack.pop()!
         const rect = node.getBoundingClientRect()
-        if (!rect || rect.width === 0 || rect.height === 0) continue
-
         const style = defaultView.getComputedStyle(node)
-        const expand = computeShadowExpansion(style)
 
-        const left = rect.left + expand.left
-        const top = rect.top + expand.top
-        const right = rect.right + expand.right
-        const bottom = rect.bottom + expand.bottom
+        if (rect && rect.width !== 0 && rect.height !== 0) {
+          const expand = computeShadowExpansion(style)
 
-        if (left < minLeft) minLeft = left
-        if (top < minTop) minTop = top
-        if (right > maxRight) maxRight = right
-        if (bottom > maxBottom) maxBottom = bottom
+          const left = rect.left + expand.left
+          const top = rect.top + expand.top
+          const right = rect.right + expand.right
+          const bottom = rect.bottom + expand.bottom
+
+          if (left < minLeft) minLeft = left
+          if (top < minTop) minTop = top
+          if (right > maxRight) maxRight = right
+          if (bottom > maxBottom) maxBottom = bottom
+        }
+
+        if (!isClippingOverflow(style)) {
+          for (let i = 0; i < node.children.length; i++) {
+            stack.push(node.children[i])
+          }
+        }
       }
 
       const width = Math.max(0, maxRight - minLeft)

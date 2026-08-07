@@ -21,7 +21,9 @@
     "paths": {
       "@/*": ["./src/*"],
       "@screenshot": ["./vendor/screenshot/src/index"],
-      "@screenshot/*": ["./vendor/screenshot/src/*"]
+      "@screenshot/*": ["./vendor/screenshot/src/*"],
+      "@snapdom": ["./vendor/snapdom/src/index"],
+      "@snapdom/*": ["./vendor/snapdom/src/*"]
     }
   },
   "include": [

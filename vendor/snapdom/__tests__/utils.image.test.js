@@ -1,0 +1,318 @@
+// __tests__/utils.image.more.test.js
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { inlineSingleBackgroundEntry } from '../src/utils/image.js'
+import { snapFetch } from '../src/modules/snapFetch.js'
+import { safeEncodeURI, resolveURL } from '../src/utils/helpers.js'
+import { cache } from '../src/core/cache.js'
+
+// Silence our intentional rejections so Vitest doesn't flag them as unhandled
+if (typeof window !== 'undefined') {
+  window.addEventListener('unhandledrejection', (e) => {
+    const msg = String(e?.reason?.message || '')
+    if (
+      msg.includes('[SnapDOM - snapFetch] Fetch failed and no proxy provided') ||
+      msg.includes('[SnapDOM - snapFetch] Recently failed (cooldown).') ||
+      msg.includes('Image load timed out')
+    ) {
+      e.preventDefault()
+    }
+  })
+}
+
+function clearCaches() {
+  cache.image?.clear?.()
+  cache.background?.clear?.()
+  cache.resource?.clear?.()
+  cache.font?.clear?.()
+}
+
+let OrigImage
+let OrigFetch
+
+beforeEach(() => {
+  vi.restoreAllMocks()
+  clearCaches()
+
+  OrigImage = globalThis.Image
+  OrigFetch = globalThis.fetch
+
+  // Default fetch: OK for both blob() and text() cases
+  globalThis.fetch = vi.fn(async () => ({
+    ok: true,
+    status: 200,
+    blob: async () =>
+      new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], { type: 'image/png' }), // valid PNG header
+    text: async () => '<svg xmlns="http://www.w3.org/2000/svg"><rect width="1" height="1"/></svg>',
+  }))
+})
+
+afterEach(() => {
+  globalThis.Image = OrigImage
+  globalThis.fetch = OrigFetch
+})
+
+// -----------------------------
+// inlineSingleBackgroundEntry
+// -----------------------------
+describe('inlineSingleBackgroundEntry', () => {
+  it('returns gradients and "none" unchanged', async () => {
+    await expect(inlineSingleBackgroundEntry('linear-gradient(white, black)')).resolves.toBe('linear-gradient(white, black)')
+    await expect(inlineSingleBackgroundEntry('none')).resolves.toBe('none')
+  })
+
+  it('returns non-url entries unchanged', async () => {
+    await expect(inlineSingleBackgroundEntry('foo bar baz')).resolves.toBe('foo bar baz')
+  })
+
+  it('returns cached data URL when present in cache.background', async () => {
+    const url = 'https://example.com/img.png'
+    const data = 'data:image/png;base64,AAA'
+    // Cache key is `<proxy>|<url>` (no proxy here → empty prefix).
+    cache.background.set(`|${url}`, data)
+    const out = await inlineSingleBackgroundEntry(`url("${url}")`)
+    expect(out).toBe(`url("${data}")`)
+  })
+
+  it('a no-proxy failure does not poison a later capture using a proxy (#8)', async () => {
+    const url = 'https://cors.example.com/img.png'
+    const encoded = safeEncodeURI(resolveURL(url))
+
+    // No-proxy attempt previously failed → null remembered under the no-proxy key.
+    cache.background.set(`|${encoded}`, null)
+
+    // The no-proxy path still short-circuits to 'none' from its own cached failure.
+    expect(await inlineSingleBackgroundEntry(`url("${url}")`)).toBe('none')
+
+    // A capture WITH a working proxy uses a distinct key, so it fetches fresh instead of
+    // inheriting the poisoned null — the recoverable image is not silently dropped.
+    globalThis.fetch = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      blob: async () => new Blob([new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10])], { type: 'image/png' }),
+    }))
+    const out = await inlineSingleBackgroundEntry(`url("${url}")`, { useProxy: 'https://proxy/?u=' })
+    expect(out).not.toBe('none')
+    expect(out).toMatch(/^url\("data:image\/png/)
+  })
+
+  it('inlines via snapFetch on success (raster path → Image onload)', async () => {
+    // Simulate an <img> that loads immediately with non-zero size
+    globalThis.Image = class {
+      constructor() { setTimeout(() => this.onload && this.onload(), 0) }
+      set src(_) {}
+      decode() { return Promise.resolve() }
+      get naturalWidth() { return 2 }
+      get naturalHeight() { return 2 }
+      get width() { return 2 }
+      get height() { return 2 }
+      set crossOrigin(_) {}
+      set onload(_) {}
+      set onerror(_) {}
+    }
+
+    const out = await inlineSingleBackgroundEntry('url("https://assets.example.com/a.png")')
+    expect(out).toMatch(/^url\("data:image\/png;base64,/)
+  })
+
+  it('degrades to "none" if inlining fails (no proxy)', async () => {
+    // Force <img> error and make fetch fallback fail (no proxy)
+    globalThis.Image = class {
+      constructor() { setTimeout(() => this.onerror && this.onerror(), 0) }
+      set src(_) {}
+      set crossOrigin(_) {}
+      set onload(_) {}
+      set onerror(_) {}
+    }
+    const mockFetch = /** @type {any} */ (globalThis.fetch)
+    mockFetch.mockResolvedValueOnce({ ok: false, status: 500, blob: async () => new Blob([], { type: 'image/png' }) })
+
+    const out = await inlineSingleBackgroundEntry('url("https://bad.example.com/x.png")')
+    expect(out).toBe('none')
+  })
+
+  // Bug-hunt finding: image-set()/-webkit-image-set() used to fall through to extractURL's
+  // generic regex, which always grabs whichever url() appears FIRST in the string — silently
+  // discarding resolution and inlining the 1x candidate even on a 2x display.
+  describe('image-set() resolution matching', () => {
+    let originalDpr
+    beforeEach(() => {
+      originalDpr = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio')
+    })
+    afterEach(() => {
+      if (originalDpr) Object.defineProperty(window, 'devicePixelRatio', originalDpr)
+    })
+
+    it('picks the 2x candidate on a 2x display, not whichever url() comes first', async () => {
+      Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true })
+      const oneX = 'https://example.com/photo-1x.png'
+      const twoX = 'https://example.com/photo-2x.png'
+      cache.background.set(`|${oneX}`, 'data:image/png;base64,ONEX')
+      cache.background.set(`|${twoX}`, 'data:image/png;base64,TWOX')
+      const out = await inlineSingleBackgroundEntry(
+        `image-set(url("${oneX}") 1x, url("${twoX}") 2x)`
+      )
+      expect(out).toBe('url("data:image/png;base64,TWOX")')
+    })
+
+    it('picks the 1x candidate on a 1x display', async () => {
+      Object.defineProperty(window, 'devicePixelRatio', { value: 1, configurable: true })
+      const oneX = 'https://example.com/photo-1x-b.png'
+      const twoX = 'https://example.com/photo-2x-b.png'
+      cache.background.set(`|${oneX}`, 'data:image/png;base64,ONEXB')
+      cache.background.set(`|${twoX}`, 'data:image/png;base64,TWOXB')
+      const out = await inlineSingleBackgroundEntry(
+        `image-set(url("${oneX}") 1x, url("${twoX}") 2x)`
+      )
+      expect(out).toBe('url("data:image/png;base64,ONEXB")')
+    })
+
+    it('works with the -webkit- prefixed form', async () => {
+      Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true })
+      const oneX = 'https://example.com/wk-1x.png'
+      const twoX = 'https://example.com/wk-2x.png'
+      cache.background.set(`|${oneX}`, 'data:image/png;base64,WKONE')
+      cache.background.set(`|${twoX}`, 'data:image/png;base64,WKTWO')
+      const out = await inlineSingleBackgroundEntry(
+        `-webkit-image-set(url("${oneX}") 1x, url("${twoX}") 2x)`
+      )
+      expect(out).toBe('url("data:image/png;base64,WKTWO")')
+    })
+  })
+})
+
+// -----------------------------
+// snapFetch
+// -----------------------------
+// -----------------------------
+// snapFetch (helpers)
+// -----------------------------
+/**
+ * @param {import('../src/modules/snapFetch.js').SnapFetchResult} r
+ */
+function expectOkDataURL(r) {
+  expect(r.ok).toBe(true)
+  expect(typeof r.data).toBe('string')
+  expect(r.data).toMatch(/^data:/)
+}
+
+/**
+ * @param {import('../src/modules/snapFetch.js').SnapFetchResult} r
+ */
+function expectOkText(r) {
+  expect(r.ok).toBe(true)
+  expect(typeof r.data).toBe('string')
+}
+
+// -----------------------------
+// snapFetch (raster path)
+// -----------------------------
+describe('snapFetch (raster path)', () => {
+  it('resolves a DataURL when the image loads and decode succeeds', async () => {
+    globalThis.Image = class {
+      constructor() { setTimeout(() => this.onload && this.onload(), 0) }
+      set src(_) {}
+      decode() { return Promise.resolve() }
+      get naturalWidth() { return 3 }
+      get naturalHeight() { return 4 }
+      set crossOrigin(_) {}
+      set onload(_) {}
+      set onerror(_) {}
+    }
+
+    const r = await snapFetch('https://cdn.example.com/photo.jpg', { timeout: 100, as: 'dataURL' })
+    expectOkDataURL(r)
+    expect(r.mime).toMatch(/image\/png|image\/jpeg|image\/jpg/i)
+  })
+
+  it('uses credentials: "include" for same-origin URLs', async () => {
+    const spy = vi.spyOn(globalThis, 'fetch')
+    // first call uses our default globalThis.fetch mock; we only care about the opts it receives
+    await snapFetch('/local.png', { timeout: 100, as: 'blob' })
+
+    expect(spy).toHaveBeenCalledTimes(1)
+    const [, opts] = spy.mock.calls[0]
+    expect(opts.credentials).toBe('include')
+
+    spy.mockRestore()
+  })
+})
+
+// -----------------------------
+// snapFetch (svg path)
+// -----------------------------
+describe('snapFetch (svg path)', () => {
+  it('inlines SVG via direct text fetch when as:"text"', async () => {
+    const r = await snapFetch('https://example.com/icon.svg', { as: 'text' })
+    expectOkText(r)
+    expect(String(r.data)).toMatch(/^<svg[\s>]/)
+  })
+
+  it('deduplicates in-flight fetches (single network call for concurrent requests)', async () => {
+    const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+    // Slow down first fetch so both calls overlap
+    fetchSpy.mockImplementationOnce(async () => {
+      await new Promise(r => setTimeout(r, 50))
+      return {
+        ok: true,
+        status: 200,
+        text: async () => '<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+        blob: async () => new Blob([new Uint8Array([137,80,78,71])], { type: 'image/png' }),
+        headers: new Headers({ 'content-type': 'image/svg+xml' }),
+      }
+    })
+
+    const p1 = snapFetch('https://slow.example.com/a.svg', { as: 'text' })
+    const p2 = snapFetch('https://slow.example.com/a.svg', { as: 'text' })
+    const [a, b] = await Promise.all([p1, p2])
+
+    expectOkText(a)
+    expectOkText(b)
+    expect(fetchSpy).toHaveBeenCalledTimes(1)
+
+    fetchSpy.mockRestore()
+  })
+
+ it('sets cooldown after failure and resolves ok:false; subsequent calls hit fromCache quickly', async () => {
+  const fetchSpy = vi.spyOn(globalThis, 'fetch')
+
+  // Una sola falla de red es suficiente para poblar el error cache
+  fetchSpy.mockRejectedValueOnce(new Error('boom'))
+
+  const opts = { errorTTL: 5000, as: 'text' }
+
+  // 1) Primer intento: falla y entra al error cache
+  const r1 = await snapFetch('https://fail.example.com/x.svg', opts)
+  expect(r1.ok).toBe(false)
+  expect(['network', 'timeout', 'abort', 'http_error']).toContain(r1.reason)
+
+  // 2) Retry inmediato con las MISMAS opciones → debe salir de cache
+  fetchSpy.mockClear()
+  const r2 = await snapFetch('https://fail.example.com/x.svg', opts)
+  expect(r2.ok).toBe(false)
+  expect(r2.fromCache).toBe(true)
+  expect(fetchSpy).not.toHaveBeenCalled()
+
+  fetchSpy.mockRestore()
+})
+
+  it('uses proxy for cross-origin when provided and returns DataURL if requested', async () => {
+    const f = /** @type {any} */ (globalThis.fetch)
+    // La primera llamada en este test no falla; simplemente queremos chequear que se aplique el proxy y DataURL
+    f.mockResolvedValueOnce({
+      ok: true,
+      status: 200,
+      // devolvemos un PNG mínimo como blob
+      blob: async () => new Blob([new Uint8Array([137,80,78,71,13,10,26,10])], { type: 'image/png' }),
+      text: async () => '<svg/>',
+      headers: new Headers({ 'content-type': 'image/png' }),
+    })
+
+    const proxy = 'https://proxy.test/?'
+    const url = 'https://blocked.example.com/asset.svg'
+    const r = await snapFetch(url, { useProxy: proxy, as: 'dataURL' })
+
+    expectOkDataURL(r)
+    expect(r.url.startsWith(proxy)).toBe(true)
+  })
+})
