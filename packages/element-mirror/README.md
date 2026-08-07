@@ -45,6 +45,12 @@ has something to draw, the way an image does before it loads. This is most
 noticeable on mirrors that appear in response to an interaction, where that one
 empty frame reads as a flicker.
 
+The first frame also waits, up to a few seconds, for a source that is still
+settling — images mid-fetch, a video buffering toward its first frame, webfonts
+loading — rather than baking placeholders into it. A live mirror would heal
+from that on the `load` event anyway; a `paused` mirror keeps its single frame
+forever, so the frame it keeps is taken after the pixels arrive.
+
 ### Naming a source
 
 `source` is resolved on every cycle rather than once, so a ref that is still

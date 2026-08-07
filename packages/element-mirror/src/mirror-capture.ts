@@ -68,6 +68,19 @@ const COST_WEIGHT = 0.2
 /** How long to wait before looking again for a missing or zero-sized source. */
 const RETRY_MS = 250
 
+/**
+ * How long the first frame will wait for a source that is still settling.
+ *
+ * A first capture taken while an image is fetching or a video is buffering
+ * bakes the loading state into the frame, and a paused mirror keeps that one
+ * frame forever — its single-frame subscription retires on painting, so the
+ * `load` event that heals a live mirror arrives with no one listening. Waiting
+ * is bounded so a lazy image below the fold or a hostile network cannot hold a
+ * mirror blank indefinitely; the bound matches the engine's own fetch timeout,
+ * past which it substitutes placeholders anyway.
+ */
+const SETTLE_PATIENCE_MS = 3000
+
 /** How long an unserviced element keeps its observers before being dropped. */
 const STALE_MS = 5000
 
@@ -185,6 +198,8 @@ interface SourceState {
   /** Playback positions of any videos, to notice frames advancing. */
   videoSignature: string
   lastSeenAt: number
+  /** When this source was first wanted, bounding the first-frame wait. */
+  wantedSince: number
   mutation: MutationObserver
   resize: ResizeObserver
   unlisten: () => void
@@ -204,6 +219,7 @@ function stateFor(element: Element, now: number) {
       costMs: 0,
       videoSignature: '',
       lastSeenAt: now,
+      wantedSince: now,
       mutation: new MutationObserver(() => {
         created.dirty = true
       }),
@@ -258,6 +274,35 @@ function selfAndDescendants(target: Element, selector: string) {
  */
 function cannotDrawVideo(video: HTMLVideoElement) {
   return video.readyState < video.HAVE_CURRENT_DATA
+}
+
+/**
+ * Whether the source still has pixels on their way to it: an image fetching, a
+ * video loading toward its first frame, webfonts swapping in. Capturing now
+ * would bake the loading state — a placeholder box, a missing frame, fallback
+ * metrics — into the result.
+ *
+ * An image with a broken src does not hold this true forever: browsers mark an
+ * image `complete` when it errors, not only when it loads. Videos count only
+ * while actively fetching, so a `preload="none"` poster or a video with no
+ * source does not read as settling.
+ */
+function stillSettling(target: Element) {
+  const images = selfAndDescendants(target, 'img') as HTMLImageElement[]
+  if (images.some((image) => !image.complete)) return true
+
+  const videos = selfAndDescendants(target, 'video') as HTMLVideoElement[]
+  if (
+    videos.some(
+      (video) =>
+        cannotDrawVideo(video) &&
+        video.networkState === video.NETWORK_LOADING
+    )
+  ) {
+    return true
+  }
+
+  return document.fonts?.status === 'loading'
 }
 
 /**
@@ -415,6 +460,21 @@ async function capture(
   // One layout read per capture, shared by every mirror of this element.
   const rect = element.getBoundingClientRect()
   if (rect.width === 0 || rect.height === 0) return now + RETRY_MS
+
+  // The first frame is worth a short wait. While the source is still settling
+  // — an image fetching, a video buffering toward its first frame, webfonts
+  // loading — a capture would bake the loading state into the frame, and for a
+  // paused mirror that one frame is final: its subscription retires on
+  // painting, so the `load` that heals a live mirror finds no one listening.
+  // Only the first frame waits; afterwards the last good frame stays up and
+  // the repaint listeners re-capture when the pixels arrive.
+  if (
+    state.timeline.length === 0 &&
+    now - state.wantedSince < SETTLE_PATIENCE_MS &&
+    stillSettling(element)
+  ) {
+    return now + RETRY_MS
+  }
 
   // Backpressure: an expensive source degrades to a lower rate rather than
   // saturating the main thread. Judged on the smoothed cost, because a capture
