@@ -38,15 +38,6 @@ const page = await browser.newPage({
   viewport: { width: 1280, height: 900 },
   deviceScaleFactor: 2,
 })
-// The demo can render either implementation, and which one it renders is
-// remembered per browser, so a run says which it means rather than inheriting a
-// choice someone made in a real browser.
-if (process.env.MIRROR_VERSION) {
-  await page.addInitScript(
-    (value) => window.localStorage.setItem('element-mirror-version', value),
-    process.env.MIRROR_VERSION
-  )
-}
 await page.goto(URL, { waitUntil: 'networkidle' })
 
 // A mirror off screen stops capturing, so nothing below the fold has a frame

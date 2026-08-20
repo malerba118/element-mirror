@@ -2,7 +2,8 @@
 
 import * as React from 'react'
 
-import { Mirror, useMirrorVersion } from '@/components/demo/mirror'
+import { ElementMirror } from '@frostin/element-mirror'
+
 import { PlayerSource } from '@/components/demo/player-source'
 import { CodeBlock } from '@/components/demo/section'
 import { Badge } from '@/components/ui/badge'
@@ -33,13 +34,10 @@ import {
 
 /** What CSS size the canvas is given, if any. */
 type Layout = 'natural' | 'intrinsic' | 'boxed'
-type Fit = NonNullable<React.CSSProperties['objectFit']>
 
-const FIT_VALUES: Fit[] = ['fill', 'contain', 'cover', 'none', 'scale-down']
 const POSITION_VALUES = ['center', 'top', 'bottom', 'left', 'right']
 
 export function Playground() {
-  const { version } = useMirrorVersion()
   const sourceRef = React.useRef<HTMLDivElement>(null)
   const [fps, setFps] = React.useState(12)
   const [delay, setDelay] = React.useState(0)
@@ -47,7 +45,6 @@ export function Playground() {
   const [layout, setLayout] = React.useState<Layout>('boxed')
   const [width, setWidth] = React.useState(320)
   const [height, setHeight] = React.useState(160)
-  const [objectFit, setObjectFit] = React.useState<Fit>('contain')
   const [objectPosition, setObjectPosition] = React.useState('center')
   const [transparent, setTransparent] = React.useState(true)
   const [paused, setPaused] = React.useState(false)
@@ -66,7 +63,6 @@ export function Playground() {
       `pixelRatio={${pixelRatio}}`,
     ]
     if (delay > 0) props.push(`delay={${delay}}`)
-    if (boxed && version === 1) props.push(`objectFit="${objectFit}"`)
     if (boxed && objectPosition !== 'center') {
       props.push(`objectPosition="${objectPosition}"`)
     }
@@ -76,20 +72,17 @@ export function Playground() {
       props.push(`style={{ width: ${width}, height: 'auto' }}`)
     }
     if (boxed) props.push(`style={{ width: ${width}, height: ${height} }}`)
-    const name = version === 1 ? 'ElementMirror' : 'ElementMirror2'
-    return `<${name}\n${props.map((prop) => `  ${prop}`).join('\n')}\n/>`
+    return `<ElementMirror\n${props.map((prop) => `  ${prop}`).join('\n')}\n/>`
   }, [
     boxed,
     delay,
     fps,
     height,
     layout,
-    objectFit,
     objectPosition,
     paused,
     pixelRatio,
     transparent,
-    version,
     width,
   ])
 
@@ -121,12 +114,11 @@ export function Playground() {
           </CardHeader>
           <CardContent className="flex min-h-56 items-center justify-center overflow-auto py-2">
             <div className="checkerboard inline-block rounded-md ring-1 ring-border">
-              <Mirror
+              <ElementMirror
                 source={sourceRef}
                 fps={fps}
                 delay={delay}
                 pixelRatio={pixelRatio}
-                objectFit={objectFit}
                 objectPosition={objectPosition}
                 background={transparent ? null : '#ffffff'}
                 paused={paused}
@@ -243,43 +235,13 @@ export function Playground() {
             />
           </div>
 
-          {version === 1 ? (
-            <div className="space-y-3">
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <Label className="w-fit">objectFit</Label>
-                </TooltipTrigger>
-                <TooltipContent side="right">
-                  Only has an effect once the canvas has both a width and a
-                  height to fill.
-                </TooltipContent>
-              </Tooltip>
-              <Select
-                value={objectFit}
-                disabled={!boxed}
-                onValueChange={(value) => setObjectFit(value as Fit)}
-              >
-                <SelectTrigger className="w-full">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {FIT_VALUES.map((value) => (
-                    <SelectItem key={value} value={value}>
-                      {value}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <Label className="w-fit">objectFit</Label>
-              <p className="text-xs text-muted-foreground">
-                Not a prop here. Version 2 has one fit: the source&apos;s box,
-                scaled uniformly to whatever box CSS gave the mirror.
-              </p>
-            </div>
-          )}
+          <div className="space-y-3">
+            <Label className="w-fit">objectFit</Label>
+            <p className="text-xs text-muted-foreground">
+              Not a prop. There is one fit: the source&apos;s box, scaled
+              uniformly to whatever box CSS gave the mirror.
+            </p>
+          </div>
 
           <div className="space-y-3">
             <Tooltip>
@@ -287,9 +249,8 @@ export function Playground() {
                 <Label className="w-fit">objectPosition</Label>
               </TooltipTrigger>
               <TooltipContent side="right">
-                {version === 1
-                  ? 'Decides which part survives a crop, or where a letterboxed capture sits.'
-                  : "Decides where the source's box sits in the space it did not fill."}
+                Decides where the source&apos;s box sits in the space it did
+                not fill.
               </TooltipContent>
             </Tooltip>
             <Select

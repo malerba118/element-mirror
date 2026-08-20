@@ -28,12 +28,6 @@ const page = await browser.newPage({
   viewport: { width: 1400, height: 1000 },
   deviceScaleFactor: 2,
 })
-if (process.env.MIRROR_VERSION) {
-  await page.addInitScript(
-    (value) => window.localStorage.setItem('element-mirror-version', value),
-    process.env.MIRROR_VERSION
-  )
-}
 await page.goto(URL, { waitUntil: 'networkidle' })
 await page.addStyleTag({
   content: 'nextjs-portal { display: none !important }',

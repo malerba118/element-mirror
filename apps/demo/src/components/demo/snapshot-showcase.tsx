@@ -3,7 +3,8 @@
 import * as React from 'react'
 import { CameraIcon } from 'lucide-react'
 
-import { Mirror, useMirrorName } from '@/components/demo/mirror'
+import { ElementMirror } from '@frostin/element-mirror'
+
 import { MirrorSource } from '@/components/demo/mirror-source'
 import { CodeBlock } from '@/components/demo/section'
 import { Badge } from '@/components/ui/badge'
@@ -21,7 +22,6 @@ const SOURCE_ID = 'snapshot-source'
 
 export function SnapshotShowcase() {
   const [take, setTake] = React.useState(0)
-  const name = useMirrorName()
 
   return (
     <div className="grid gap-6 lg:grid-cols-2">
@@ -51,7 +51,7 @@ export function SnapshotShowcase() {
         </CardHeader>
         <CardContent className="space-y-3">
           <div className="flex justify-center">
-            <Mirror
+            <ElementMirror
               // Remounting is the re-capture: a mirror that has taken its one
               // frame is done until it is asked for another.
               key={take}
@@ -69,7 +69,7 @@ export function SnapshotShowcase() {
             <CameraIcon />
             Re-capture
           </Button>
-          <CodeBlock code={`<${name} source="#${SOURCE_ID}" paused />`} />
+          <CodeBlock code={`<ElementMirror source="#${SOURCE_ID}" paused />`} />
         </CardContent>
       </Card>
     </div>

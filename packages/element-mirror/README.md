@@ -1,9 +1,12 @@
 # @frostin/element-mirror
 
 A React component that mirrors any DOM element into a `<canvas>`, repainting up
-to sixty times a second. The canvas sizes the same way an `<img>` of the source
-would: left alone it takes the source's own dimensions, and any CSS you give it
-wins from there.
+to sixty times a second. The mirror sizes the same way an `<img>` of the source
+would: left alone it takes the source's own layout size, and any CSS you give
+it wins from there. It lays out like the source's layout box and paints like
+the source's transform: a rotating source keeps a rock-steady mirror, and a
+shadow or a focus ring that spills outside the source's box spills outside the
+mirror's too.
 
 ```tsx
 import { ElementMirror } from '@frostin/element-mirror'
@@ -31,12 +34,14 @@ at 2x) a capture costs ~5ms of main thread, and a mirror asked for 60fps gets
 | `fps`            | `number`                                          | `12`               | Maximum captures per second, up to the display refresh rate.                                         |
 | `delay`          | `number`                                          | `0`                | Milliseconds behind the source to run.                                                               |
 | `pixelRatio`     | `number`                                          | `devicePixelRatio` | Bitmap pixels captured per CSS pixel.                                                                |
-| `objectFit`      | `ObjectFit`                                       | `'fill'`           | Applies once the canvas has both a width and a height.                                               |
-| `objectPosition` | `string`                                          | `'center'`         | Alignment when `objectFit` crops or letterboxes.                                                     |
+| `objectPosition` | `string`                                          | `'center'`         | Where the source's box sits when CSS gives the mirror a box of a different ratio.                    |
 | `background`     | `string \| null`                                  | `null`             | Fill behind the element. `null` keeps transparency.                                                  |
 | `paused`         | `boolean`                                         | `false`            | Stop capturing and hold a frame. Paused before it has one, a mirror captures a single frame to hold. |
 
-Anything else is forwarded to the canvas, and `ref` points at the canvas.
+Anything else is forwarded to the element that holds the mirror's box, and
+`ref` points at it. The canvas inside is positioned out of flow — what it
+paints is not what the mirror occupies — and is marked `data-element-mirror`
+for anything measuring a mirror from the outside.
 
 A mirror shows nothing until its first capture arrives. Captures cannot be taken
 synchronously, so a canvas that painted straight away would put an empty box on
@@ -92,47 +97,26 @@ There is no sizing prop. The source supplies a natural size and an aspect ratio,
 CSS decides everything else, and the rules are the ones you already use on an
 image:
 
-- nothing — the canvas comes out at the source's own width and height.
+- nothing — the mirror comes out at the source's own width and height.
 - width only — height follows the source's aspect ratio, and vice versa.
-- width and height — `objectFit` decides between cropping (`cover`) and
-  letterboxing (`contain`), and `objectPosition` decides what survives it.
+- width and height — the source's box is scaled uniformly to the largest size
+  that fits inside, and `objectPosition` decides where it sits in the space it
+  did not fill.
 
 CSS wins in every case, whether it comes from a class, a stylesheet, or the
-`style` prop. Sizing the canvas never changes what is captured: the bitmap is
+`style` prop. Sizing the mirror never changes what is captured: the bitmap is
 always the source at `pixelRatio`, so a mirror left at its natural size is still
 crisp on a retina display.
 
-Under the hood the canvas declares only an intrinsic size (`contain: size` +
-`contain-intrinsic-size`), so any width or height from CSS still wins, exactly
-as it does on an image.
-
-### ElementMirror2, and what it changes
-
-`ElementMirror2` is a second implementation of all of the above, exported beside
-the first while it is being evaluated. It answers one question differently: what
-a mirror's box is.
-
-`ElementMirror` mirrors the box the source occupies on screen — the box a
-`transform` moves and scales — and fits the capture into whatever box CSS gives
-the canvas. So a source that has been translated, rotated or scaled is squeezed
-back into a box that no longer matches its shape, and a mirror of an animating
-element changes size as the animation runs.
-
-`ElementMirror2` mirrors the box the source _laid out_ in, and paints the
-capture wherever the source's transform put it, at the source's own scale, out
-of flow and outside that box if that is where it went. A mirror of an animating
-element keeps a still box while the paint moves inside and past it, which is what
-makes it usable for trails, echoes and motion blur.
-
-That makes `objectFit` meaningless on the second: stretching a capture to fill a
-box would have to stretch the paint that left the box along with it, so there is
-one fit and it is uniform. `objectPosition` remains, deciding where the source's
-box sits when CSS gives the mirror one of a different ratio, and the way to cover
-a box is the way you would cover it with any oversized image:
+There is deliberately no `objectFit`: a mirror that stretched its capture to
+fill a box would have to stretch the paint that left the box along with it, so
+there is one fit and it is uniform. The way to cover a box is the way you would
+cover it with any oversized image — size the mirror to the smallest box that
+covers, and let the container crop it:
 
 ```tsx
 <div className="relative aspect-video overflow-hidden">
-  <ElementMirror2
+  <ElementMirror
     source={videoRef}
     className="absolute top-1/2 left-1/2 min-h-full min-w-full"
     style={{ width: 'auto', height: 'auto', transform: 'translate(-50%, -50%)' }}
@@ -140,10 +124,24 @@ a box is the way you would cover it with any oversized image:
 </div>
 ```
 
-One more difference follows from the paint being out of flow: `ref` and any
-forwarded props land on the element that holds the box rather than on the canvas,
-which is marked `data-element-mirror` for anything measuring a mirror from the
-outside.
+Under the hood the wrapper declares only an intrinsic size (`contain: size` +
+`contain-intrinsic-size`), so any width or height from CSS still wins, exactly
+as it does on an image.
+
+### The mirror's box
+
+A mirror's box is the box the source _laid out_ in — not the box it occupies on
+screen, which a `transform` moves and scales every frame. The capture is painted
+wherever the source's transform put it, at the source's own scale, out of flow
+and outside the box if that is where it went. A mirror of an animating element
+keeps a still box while the paint moves inside and past it, which is what makes
+it usable for trails, echoes and motion blur — and it is the same division CSS
+itself uses, where transforms never affect layout.
+
+The paint reaches past the box for untransformed sources too: a shadow, an
+outline, a focus ring, or — the common case, since Tailwind's `ring` utilities
+are box shadows — a card's border-like ring all land outside the mirror's box
+in the same place the source's do.
 
 Nothing declares how far a mirror paints. Every frame arrives with the geometry
 of the capture it came from, so the canvas is sized to hold the frame before that
@@ -152,23 +150,6 @@ whole pixels, doubling while the paint keeps reaching further and giving it back
 once the reach has held smaller for a while. A ring costs a pixel a side; an
 animation sweeping two hundred pixels out and back costs a handful of
 reallocations, which `.perf/bleed.mjs` measures along with everything else.
-
-The demo runs every showcase on either implementation, behind the `v1`/`v2`
-switch in its header, and `.perf/versions.mjs` shoots both for comparison.
-
-### Ink outside the box
-
-A capture is the source's box, and plenty of interface paints outside one: a
-shadow, an outline, a focus ring, or — the common case, since Tailwind's `ring`
-utilities are box shadows — a card's own border-like ring, mirrored from a
-wrapper around the card. Captures now widen by however far the subtree's ink
-actually reaches past the box, per side, so those edges survive.
-
-Which is a fidelity fix for `ElementMirror`, and a little more for
-`ElementMirror2`: the two put that extra ink in different places. The first is
-its box and nothing else, so it shows the box and drops the overhang, exactly as
-before. The second paints out of flow, so the overhang lands outside its box in
-the same place the source's does, alongside whatever a transform took out there.
 
 ### Blurred backdrops
 
@@ -181,10 +162,14 @@ itself sit on top.
 <div className="relative aspect-video overflow-hidden">
   <ElementMirror
     source={videoRef}
-    objectFit="cover"
     pixelRatio={0.5}
-    className="absolute inset-0 h-full w-full"
-    style={{ filter: 'blur(28px)', transform: 'scale(1.15)' }}
+    className="absolute top-1/2 left-1/2 min-h-full min-w-full"
+    style={{
+      width: 'auto',
+      height: 'auto',
+      filter: 'blur(28px)',
+      transform: 'translate(-50%, -50%) scale(1.15)',
+    }}
   />
   <video ref={videoRef} className="relative mx-auto h-full w-auto" … />
 </div>

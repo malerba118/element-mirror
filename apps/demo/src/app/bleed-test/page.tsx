@@ -2,10 +2,10 @@
 
 import * as React from 'react'
 
-import { ElementMirror2 } from '@frostin/element-mirror'
+import { ElementMirror } from '@frostin/element-mirror'
 
 /**
- * Exists for `.perf/bleed.mjs`, which asks whether ElementMirror2 can lay out
+ * Exists for `.perf/bleed.mjs`, which asks whether ElementMirror can lay out
  * at its source's layout box while painting the source's transform, and land on
  * the source's own pixels while doing it.
  *
@@ -156,7 +156,7 @@ export default function BleedTest() {
               reach on its own, before the frame that needs it is drawn rather
               than after one was clipped.
             */}
-            <ElementMirror2
+            <ElementMirror
               source={`#bleed-${name}`}
               fps={60}
               pixelRatio={2}
@@ -188,7 +188,7 @@ export default function BleedTest() {
         style={{ display: 'flex', alignItems: 'center', gap: 4 }}
       >
         <Marker />
-        <ElementMirror2 source="#bleed-flow" fps={30} pixelRatio={1} data-mirror />
+        <ElementMirror source="#bleed-flow" fps={30} pixelRatio={1} data-mirror />
         <Marker />
       </div>
     </div>

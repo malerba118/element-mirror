@@ -2,8 +2,9 @@
 
 import * as React from 'react'
 
+import { ElementMirror } from '@frostin/element-mirror'
+
 import { Stat, useCaptureStats } from '@/components/demo/capture-stats'
-import { Mirror, useMirrorName } from '@/components/demo/mirror'
 import { MirrorSource } from '@/components/demo/mirror-source'
 import { CodeBlock, Token } from '@/components/demo/section'
 import { Badge } from '@/components/ui/badge'
@@ -26,7 +27,6 @@ const GHOSTS = 4
 export function DelayShowcase() {
   const [spacing, setSpacing] = React.useState(250)
   const stats = useCaptureStats()
-  const name = useMirrorName()
 
   const delays = Array.from({ length: GHOSTS }, (_, index) => index * spacing)
 
@@ -61,7 +61,7 @@ export function DelayShowcase() {
           <CardContent className="grid grid-cols-2 gap-x-4 gap-y-3">
             {delays.map((delay) => (
               <div key={delay} className="space-y-1.5">
-                <Mirror
+                <ElementMirror
                   source={`#${SOURCE_ID}`}
                   fps={FPS}
                   delay={delay}
@@ -148,7 +148,7 @@ export function DelayShowcase() {
 
       <CodeBlock
         code={`{[0, 250, 500, 750].map((delay) => (
-  <${name} key={delay} source="#${SOURCE_ID}" fps={${FPS}} delay={delay} />
+  <ElementMirror key={delay} source="#${SOURCE_ID}" fps={${FPS}} delay={delay} />
 ))}`}
       />
     </div>

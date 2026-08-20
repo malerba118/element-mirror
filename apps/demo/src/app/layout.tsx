@@ -1,6 +1,5 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
-import { MirrorVersionProvider } from "@/components/demo/mirror";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import "./globals.css";
 
@@ -27,9 +26,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       className={`${geistSans.variable} ${geistMono.variable} h-full antialiased`}
     >
       <body className="min-h-full flex flex-col">
-        <MirrorVersionProvider>
-          <TooltipProvider>{children}</TooltipProvider>
-        </MirrorVersionProvider>
+        <TooltipProvider>{children}</TooltipProvider>
       </body>
     </html>
   );

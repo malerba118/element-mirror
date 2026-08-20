@@ -3,7 +3,7 @@ import { mkdirSync } from 'node:fs'
 import { compare, decodePng } from './pixels.mjs'
 
 /**
- * Asks whether ElementMirror2 can lay out at its source's layout box while
+ * Asks whether ElementMirror can lay out at its source's layout box while
  * painting the source's transform, against /bleed-test, which exists for this
  * script.
  *
