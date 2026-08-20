@@ -82,8 +82,10 @@ export type ElementMirror2Props = Omit<
   /**
    * Where the source's box sits when the mirror's box is a different shape.
    *
-   * Takes the CSS object-position forms that make sense here: keywords, a
-   * percentage of the leftover space, or a length from the leading edge.
+   * Takes the CSS object-position forms that make sense here, one value or
+   * two: the keywords, a percentage of the leftover space, or a pixel length
+   * from the leading edge. Other units, calc(), and the four-value edge
+   * forms are not parsed.
    *
    * @default 'center'
    */
@@ -95,6 +97,10 @@ export type ElementMirror2Props = Omit<
    * Covers the box the source laid out in, wherever the source's transform has
    * since taken it, so a transformed source that needs a backdrop of its own
    * is better off with a background on the source itself.
+   *
+   * Read when a frame is drawn, so a live mirror shows a change within a
+   * second at worst, while a paused mirror holds its last frame, background
+   * included.
    *
    * null preserves transparency.
    *
@@ -231,30 +237,71 @@ function readLayoutBox(element: Element) {
  * position the mirror itself. An inline `position: relative` would have done the
  * same job while quietly outranking the `absolute` a class asked for.
  *
- * Then size containment, so the canvas inside contributes nothing to the box,
- * and an aspect ratio, which is what gives every sizing case the same answer an
- * image gives: a width implies the height, a height implies the width, and both
- * are obeyed as given.
- *
- * The intrinsic size is the exception, declared only for a mirror CSS said
- * nothing about. It is what gives that mirror a box at all, and it outranks the
- * ratio wherever both could apply — resolving the free axis to the source's own
- * dimension instead of the ratio's, which for a mirror 150px wide is the
- * source's full height rather than the 62px that keeps its shape.
+ * Then size containment, so the canvas inside contributes nothing to the box;
+ * an aspect ratio; and the source's size as the declared intrinsic size. The
+ * three together give every sizing case the same answer an image gives: left
+ * alone the box is the source's own size, a width implies the height, a height
+ * implies the width, and both are obeyed as given. The intrinsic size only
+ * speaks when CSS said nothing — a definite dimension resolves the free axis
+ * through the ratio, never from the intrinsic size — so declaring it always
+ * costs nothing and is what gives an unsized mirror a box at all.
  */
-function sizing(
-  intrinsic: { width: number; height: number },
-  declared: boolean
-): React.CSSProperties {
+function sizing(intrinsic: {
+  width: number
+  height: number
+}): React.CSSProperties {
   if (!canDeclareIntrinsicSize) {
-    return { contain: 'layout', width: intrinsic.width, height: intrinsic.height }
+    // Explicit inline dimensions, which outrank every stylesheet: in a browser
+    // this old, "CSS always wins" narrows to the `style` prop. The alternative
+    // is a box that collapses to nothing, which is worse. Strings rather than
+    // numbers so the same object can be written straight to a style
+    // declaration, which has no notion of a unitless length.
+    return {
+      contain: 'layout',
+      width: `${intrinsic.width}px`,
+      height: `${intrinsic.height}px`,
+    }
   }
   return {
     contain: 'size layout',
     aspectRatio: `${intrinsic.width} / ${intrinsic.height}`,
-    ...(declared
-      ? { containIntrinsicSize: `${intrinsic.width}px ${intrinsic.height}px` }
-      : null),
+    containIntrinsicSize: `${intrinsic.width}px ${intrinsic.height}px`,
+  }
+}
+
+/**
+ * The wrapper's content box, and where that box sits: an absolutely positioned
+ * canvas offsets from the padding box, so padding on the wrapper moves where
+ * the paint has to go.
+ *
+ * From computed style rather than a client rect, because the rect is the box
+ * after the wrapper's own transform and the canvas is placed in the
+ * coordinates before it.
+ */
+function readContentBox(wrapper: HTMLElement) {
+  const style = getComputedStyle(wrapper)
+  const x = px(style.paddingLeft)
+  const y = px(style.paddingTop)
+  // `width` reports whichever box `box-sizing` refers to, so the padding and
+  // borders are in it under `border-box` and are not otherwise.
+  const outer = style.boxSizing === 'border-box' ? 1 : 0
+  return {
+    x,
+    y,
+    width:
+      px(style.width) -
+      outer *
+        (x +
+          px(style.paddingRight) +
+          px(style.borderLeftWidth) +
+          px(style.borderRightWidth)),
+    height:
+      px(style.height) -
+      outer *
+        (y +
+          px(style.paddingBottom) +
+          px(style.borderTopWidth) +
+          px(style.borderBottomWidth)),
   }
 }
 
@@ -299,34 +346,28 @@ export const ElementMirror2 = React.forwardRef<
   React.useImperativeHandle(forwardedRef, () => wrapperRef.current!)
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
 
-  // The source's layout box, for the wrapper's intrinsic size and ratio. State
-  // because it has to reach the style; everything else the drawing needs is
-  // kept in refs, so a source that moves or grows never re-renders the mirror
-  // and never restarts its capture.
+  // The source's layout box, for the wrapper's intrinsic size and ratio.
+  // State so React renders the same declarations it would find on the element,
+  // but not the path a frame travels: a frame is drawn at its own layout size,
+  // and a wrapper still sized for the previous frame would squeeze it, so the
+  // blit writes the style and measures synchronously and this commit arrives
+  // afterwards as a no-op.
   const [intrinsic, setIntrinsic] = React.useState<{
     width: number
     height: number
   } | null>(null)
   const [hasFrame, setHasFrame] = React.useState(false)
   const hasFrameRef = React.useRef(false)
-  /**
-   * Whether this mirror has to declare its intrinsic size to have a box at all.
-   *
-   * An aspect ratio alone gives every sizing case the image-like answer — a
-   * width implies the height, a height implies the width, both are obeyed — and
-   * a declared intrinsic size beats the ratio in every one of them, resolving
-   * the free axis to the source's own dimension rather than the ratio's. The
-   * one case the ratio cannot answer is a mirror CSS said nothing about, which
-   * collapses to nothing. So the size is declared on the evidence of that: an
-   * empty box means nothing else was going to give it one.
-   */
-  const [declared, setDeclared] = React.useState(false)
-  const intrinsicRef = React.useRef(intrinsic)
-  intrinsicRef.current = intrinsic
 
-  // The mirror's own box, as CSS settled it, against which the source's box is
-  // scaled and placed.
-  const boxRef = React.useRef<{ width: number; height: number } | null>(null)
+  // The mirror's own content box, as CSS settled it, against which the
+  // source's box is scaled and placed — plus where that box sits in the
+  // padding box, which is what the canvas's offsets are measured from.
+  const boxRef = React.useRef<{
+    x: number
+    y: number
+    width: number
+    height: number
+  } | null>(null)
   // What the canvas currently holds: the source's box in the middle, plus
   // `reach` source pixels of room on every side for the paint to spill into,
   // and how much of the source that adds up to once rounded to whole device
@@ -340,12 +381,16 @@ export const ElementMirror2 = React.forwardRef<
   })
   const spareFramesRef = React.useRef(0)
 
-  // Presentation-only options, read at blit time so that changing one never
-  // restarts capturing.
+  // Presentation-only options, read when a frame is drawn or the canvas is
+  // fitted, so that changing one never restarts capturing.
   const backgroundRef = React.useRef(background)
   backgroundRef.current = background
   const positionRef = React.useRef(objectPosition)
   positionRef.current = objectPosition
+  // The caller's style, read at blit time: a sizing declaration written there
+  // outranks the ones the mirror writes for itself.
+  const styleRef = React.useRef(style)
+  styleRef.current = style
 
   /**
    * Fits the canvas over the mirror's box.
@@ -368,8 +413,8 @@ export const ElementMirror2 = React.forwardRef<
     // One fit, uniform: the source's box, as large as the mirror's box allows.
     const scale = Math.min(box.width / held.width, box.height / held.height)
     const { x, y } = alignment(positionRef.current)
-    const left = place(x, box.width - held.width * scale)
-    const top = place(y, box.height - held.height * scale)
+    const left = box.x + place(x, box.width - held.width * scale)
+    const top = box.y + place(y, box.height - held.height * scale)
 
     // Shown at the extent the canvas actually covers rather than the box it was
     // asked for. A bitmap is a whole number of device pixels around a box that
@@ -385,6 +430,47 @@ export const ElementMirror2 = React.forwardRef<
     canvas.style.height = `${held.extentHeight * scale}px`
   }, [])
 
+  // The mirror's box, tracked apart from capturing: a paused mirror holds its
+  // frame, but the page can still resize its box, and the canvas has to
+  // follow. Watched rather than measured once, because the box is whatever CSS
+  // makes of it, which the page can change without touching this component.
+  React.useEffect(() => {
+    const wrapper = wrapperRef.current
+    if (!wrapper) return
+
+    const measure = () => {
+      boxRef.current = readContentBox(wrapper)
+      fit()
+    }
+    // Read now as well as observed: a capture can land before the observers'
+    // first callback, and a canvas with no box measured yet would be shown at
+    // its bitmap's size for that one frame.
+    measure()
+
+    // Both boxes, because padding can move the content box without resizing
+    // the box being watched: under content-box sizing new padding grows the
+    // border box while size containment pins the content box, and under
+    // border-box sizing it shrinks the content box inside an unmoved border
+    // box. Either observation alone is blind to one of the two.
+    const observers = [new ResizeObserver(measure), new ResizeObserver(measure)]
+    observers[0].observe(wrapper)
+    try {
+      observers[1].observe(wrapper, { box: 'border-box' })
+    } catch {
+      // A browser without box options resolves padding changes only when the
+      // content box happens to resize with them.
+    }
+    return () => {
+      for (const observer of observers) observer.disconnect()
+    }
+  }, [fit])
+
+  // Presentation-only, read at fit time so a change never restarts capturing —
+  // but somebody still has to re-place the canvas when it changes.
+  React.useEffect(() => {
+    fit()
+  }, [objectPosition, fit])
+
   React.useEffect(() => {
     const canvas = canvasRef.current
     const wrapper = wrapperRef.current
@@ -396,11 +482,6 @@ export const ElementMirror2 = React.forwardRef<
     if (paused && hasFrameRef.current) return
 
     const ratio = pixelRatio ?? window.devicePixelRatio ?? 1
-    // Read now as well as observed: a capture can land before an observer's
-    // first callback, and a canvas with no size of its own would be shown at
-    // its bitmap's size for that one frame.
-    const initial = wrapper.getBoundingClientRect()
-    boxRef.current = { width: initial.width, height: initial.height }
     // Assume visible until the observer says otherwise, so the first frame
     // paints without waiting a callback.
     let onScreen = true
@@ -460,7 +541,7 @@ export const ElementMirror2 = React.forwardRef<
         warnedAboutSize = true
         if (process.env.NODE_ENV !== 'production') {
           console.warn(
-            'ElementMirror: the source paints further outside its layout box ' +
+            'ElementMirror2: the source paints further outside its layout box ' +
               'than a canvas can be allocated for, so the edges of it are cut ' +
               'off. Lower pixelRatio, or mirror a smaller source.',
             resolveSource(source)
@@ -504,6 +585,29 @@ export const ElementMirror2 = React.forwardRef<
         const layout = {
           width: geometry.layoutWidth,
           height: geometry.layoutHeight,
+        }
+
+        // A frame at a new size resizes the wrapper here, synchronously,
+        // rather than through the intrinsic-size state. That state reaches the
+        // element a React commit and a resize callback later — one or two
+        // displayed frames — and until it does, the box is the old size and
+        // the fit below would squeeze the new frame into it: a source being
+        // dragged taller flashes its mirror narrower. Writing the style now
+        // and measuring straight back keeps every paint self-consistent, and
+        // the state update at the bottom re-renders these same values, so
+        // React's own write changes nothing.
+        const held = heldRef.current
+        if (layout.width !== held.width || layout.height !== held.height) {
+          const declared = sizing(layout) as Record<string, string>
+          const overrides = styleRef.current as
+            | Record<string, unknown>
+            | undefined
+          const target = wrapper.style as unknown as Record<string, string>
+          for (const key of Object.keys(declared)) {
+            if (overrides?.[key] !== undefined) continue
+            target[key] = declared[key]
+          }
+          boxRef.current = readContentBox(wrapper)
         }
         // The bitmap at its own scale, placed where the capture says it belongs:
         // its own top-left against the layout box's, plus however far the
@@ -564,22 +668,6 @@ export const ElementMirror2 = React.forwardRef<
       },
     })
 
-    // Watched rather than measured once: the mirror's box is whatever CSS
-    // makes of it, which the page can change without touching this component.
-    const resize = new ResizeObserver(([entry]) => {
-      const size = entry.contentRect
-      boxRef.current = { width: size.width, height: size.height }
-      // Only once the ratio is in place, since a mirror that has not measured
-      // its source yet has no box for reasons that say nothing about the CSS.
-      // Observed rather than checked once, so a mirror mounted inside a hidden
-      // tab decides when it is shown.
-      if (intrinsicRef.current && (size.width === 0 || size.height === 0)) {
-        setDeclared(true)
-      }
-      fit()
-    })
-    resize.observe(wrapper)
-
     // Margined by what the source might paint: the wrapper can be well off
     // screen while the paint that belongs to it is not.
     const intersection = new IntersectionObserver(
@@ -592,7 +680,6 @@ export const ElementMirror2 = React.forwardRef<
     intersection.observe(wrapper)
 
     return () => {
-      resize.disconnect()
       intersection.disconnect()
       subscription.release()
     }
@@ -605,21 +692,6 @@ export const ElementMirror2 = React.forwardRef<
     const element = resolveSource(source)
     if (element) setIntrinsic(readLayoutBox(element))
   }, [source])
-
-  /**
-   * Decides whether this mirror has to declare its intrinsic size.
-   *
-   * Checked here as well as on resize because the answer is usually the same
-   * before and after the ratio lands — an empty box stays an empty box — and a
-   * ResizeObserver reports changes rather than states, so the one case that
-   * needs deciding is the one case it says nothing about.
-   */
-  useIsomorphicLayoutEffect(() => {
-    const wrapper = wrapperRef.current
-    if (!wrapper || declared || !intrinsic) return
-    const box = wrapper.getBoundingClientRect()
-    if (box.width === 0 || box.height === 0) setDeclared(true)
-  }, [intrinsic, declared])
 
   return (
     <span
@@ -644,7 +716,7 @@ export const ElementMirror2 = React.forwardRef<
         // mirror appears in response to an interaction. Hidden rather than
         // unmounted, so it still holds its layout box.
         ...(hasFrame ? null : { visibility: 'hidden' as const }),
-        ...(intrinsic ? sizing(intrinsic, declared) : null),
+        ...(intrinsic ? sizing(intrinsic) : null),
         ...style,
       }}
       // Says which of the two elements is the mirror's box, for anything
