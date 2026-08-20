@@ -125,6 +125,52 @@ const REPAINT_LISTENER: AddEventListenerOptions = {
   passive: true,
 }
 
+/**
+ * What a frame depicts, beyond its pixels.
+ *
+ * A capture is a picture of the box an element paints into, which for a
+ * transformed element is neither the box it laid out in nor in the same place.
+ * Recorded here at the moment of capture, so a mirror can place a frame where
+ * the source was when it was taken rather than where the source is now — the
+ * difference between a trail of ghosts along a path and a stack of them under
+ * the live element.
+ */
+export interface FrameGeometry {
+  /** The box the source laid out in, which its own transform cannot affect. */
+  layoutWidth: number
+  layoutHeight: number
+  /**
+   * How far the source's own transform moved it, in CSS pixels. Only the
+   * moving part: what the transform did to the shape is in the bitmap already,
+   * because the engine bakes it and widens the capture to fit, while a
+   * translation is stripped and left to the caller — a mirror is somewhere else
+   * on the page, so where its source was pushed to is a fact about the source
+   * rather than about where the mirror should paint.
+   */
+  translateX: number
+  translateY: number
+  /**
+   * Where the bitmap's top-left sits relative to the layout box's, in CSS
+   * pixels, and where the source's painted box landed inside the bitmap. Zero
+   * and the layout box's own size for a capture of something plain; a capture
+   * widens per side for whatever paints outside the box — a rotation's corners,
+   * a shadow, a child's ring — so a caller placing the bitmap has to be told.
+   */
+  originX: number
+  originY: number
+  boxX: number
+  boxY: number
+  boxWidth: number
+  boxHeight: number
+  /**
+   * Bitmap pixels per CSS pixel in this capture, which is the highest any
+   * mirror of the source asked for rather than what any one of them wanted.
+   * A caller drawing the bitmap at a size of its own choosing needs this to
+   * know what size it already is.
+   */
+  pixelRatio: number
+}
+
 export interface MirrorSubscriber {
   /** Resolved each cycle, so a source may appear, change, or disappear. */
   resolve: () => Element | null
@@ -138,7 +184,8 @@ export interface MirrorSubscriber {
   onFrame: (
     bitmap: HTMLCanvasElement,
     sourceWidth: number,
-    sourceHeight: number
+    sourceHeight: number,
+    geometry: FrameGeometry
   ) => void
 }
 
@@ -164,6 +211,7 @@ interface Frame {
   /** The source's CSS size at the time, so a lagging mirror lags in size too. */
   width: number
   height: number
+  geometry: FrameGeometry
   /**
    * Whether the canvas holds the frame yet. A capture returns to the loop when
    * its main-thread work is done, and the browser may still be rasterizing;
@@ -339,6 +387,16 @@ let timer: number | undefined
 let frame: number | undefined
 let wakeAt = Number.POSITIVE_INFINITY
 let pumping = false
+/**
+ * A wake asked for while a pump was already in flight.
+ *
+ * That pump cannot serve it: its subscriber list was taken at the top, and the
+ * wake it books on the way out comes from those subscribers alone. A mirror
+ * that subscribed meanwhile would be left with nothing scheduled at all, and
+ * since the loop only wakes when something schedules it, one mistimed
+ * subscription would stop every mirror on the page rather than just its own.
+ */
+let kicked = false
 
 /**
  * Assumed length of a displayed frame, used to align to one.
@@ -446,6 +504,112 @@ function needsCapture(state: SourceState, element: Element, now: number) {
   return now - state.lastCaptureAt >= VERIFY_MS
 }
 
+const px = (value: string) => Number.parseFloat(value) || 0
+
+/** A computed length or percentage of a basis, in pixels. */
+function lengthOf(value: string, basis: number) {
+  return value.endsWith('%') ? (px(value) / 100) * basis : px(value)
+}
+
+/**
+ * The element's own transform, as a 2D matrix.
+ *
+ * `transform` and the individual `translate`, `rotate` and `scale` properties
+ * are separate computed values that compose in that fixed order, so reading
+ * `transform` alone would miss half of what a caller can write. Rotations out
+ * of the plane are left out rather than flattened: their painted box is a
+ * projection, and pretending otherwise would place it confidently wrong.
+ */
+function readTransform(
+  style: CSSStyleDeclaration,
+  width: number,
+  height: number
+) {
+  let matrix = new DOMMatrix()
+
+  const translate = style.getPropertyValue('translate')
+  if (translate && translate !== 'none') {
+    const parts = translate.split(' ')
+    matrix = matrix.translate(
+      lengthOf(parts[0], width),
+      lengthOf(parts[1] ?? '0px', height)
+    )
+  }
+
+  const rotate = style.getPropertyValue('rotate')
+  if (rotate && rotate !== 'none') {
+    // A bare angle, or an axis and then the angle.
+    const parts = rotate.trim().split(/\s+/)
+    const inPlane =
+      parts.length === 1 || parts[0] === 'z' || parts.slice(0, 3).join(' ') === '0 0 1'
+    if (inPlane) matrix = matrix.rotate(px(parts[parts.length - 1]))
+  }
+
+  const scale = style.getPropertyValue('scale')
+  if (scale && scale !== 'none') {
+    const parts = scale.trim().split(/\s+/)
+    matrix = matrix.scale(px(parts[0]), px(parts[1] ?? parts[0]))
+  }
+
+  if (style.transform && style.transform !== 'none') {
+    matrix = matrix.multiply(new DOMMatrix(style.transform))
+  }
+  return matrix
+}
+
+/**
+ * The source's box and how far its transform moved it.
+ *
+ * Read from the layout box and the transform rather than from the painted rect,
+ * because the rect is the two of them already combined and there is no undoing
+ * that: a 45° rotation of a square has the same painted box as a larger
+ * unrotated one. What the capture itself knows — how far it had to widen, and
+ * where — is filled in from the capture (see CaptureHandle).
+ */
+function readGeometry(
+  element: Element,
+  pixelRatio: number
+): Omit<
+  FrameGeometry,
+  'originX' | 'originY' | 'boxX' | 'boxY' | 'boxWidth' | 'boxHeight'
+> {
+  const style = getComputedStyle(element)
+
+  // What `width` reports is the box `box-sizing` refers to, which is the
+  // border box under `border-box` and the content box otherwise — the same
+  // 120.5px for an element that lays out at 120.5 in the first case and at
+  // 130.5 in the second. Either way it stays the box the element laid out in
+  // while a transform moves the painted one somewhere else entirely.
+  const inner = style.boxSizing === 'border-box' ? 0 : 1
+  const layoutWidth =
+    px(style.width) +
+    inner *
+      (px(style.paddingLeft) +
+        px(style.paddingRight) +
+        px(style.borderLeftWidth) +
+        px(style.borderRightWidth))
+  const layoutHeight =
+    px(style.height) +
+    inner *
+      (px(style.paddingTop) +
+        px(style.paddingBottom) +
+        px(style.borderTopWidth) +
+        px(style.borderBottomWidth))
+
+  // Only the translation. Turning and scaling about the transform's origin is
+  // the engine's business — it bakes both into the bitmap and reports where
+  // that left the box — and taking it from here as well would apply it twice.
+  const matrix = readTransform(style, layoutWidth, layoutHeight)
+
+  return {
+    layoutWidth,
+    layoutHeight,
+    translateX: matrix.e,
+    translateY: matrix.f,
+    pixelRatio,
+  }
+}
+
 /**
  * Adds a frame to the source's timeline if one is warranted.
  *
@@ -511,6 +675,11 @@ async function capture(
   )
   const canvas = state.pool.pop() ?? document.createElement('canvas')
 
+  // Read here rather than alongside the rect above, so that it describes the
+  // moment the capture starts rather than the moment the loop got round to
+  // considering this source.
+  const measured = readGeometry(element, pixelRatio)
+
   // Cleared before the capture: a mutation arriving mid-capture should leave
   // the element dirty rather than be swallowed by this frame.
   state.dirty = false
@@ -545,11 +714,13 @@ async function capture(
   // Timestamped from the start of the capture, which is the moment it depicts.
   // Joins the timeline now, unready, so frames sit in capture order however
   // rasterization completes; presented the moment the pixels land.
+  const geometry: FrameGeometry = { ...measured, ...handle.geometry }
   const frame: Frame = {
     canvas,
     capturedAt: started,
     width: rect.width,
     height: rect.height,
+    geometry,
     ready: false,
   }
   state.timeline.push(frame)
@@ -606,7 +777,7 @@ function present(due: MirrorSubscriber[], state: SourceState, now: number) {
     // A frame already on the canvas is worth nothing to draw again, which is
     // what keeps a still source from repainting its mirrors every cycle.
     if (subscriberState.shownAt === frame.capturedAt) continue
-    subscriber.onFrame(frame.canvas, frame.width, frame.height)
+    subscriber.onFrame(frame.canvas, frame.width, frame.height, frame.geometry)
     subscriberState.shownAt = frame.capturedAt
     subscriberState.painted = true
     counters.blits += 1
@@ -737,12 +908,20 @@ async function pump() {
     if (next < Number.POSITIVE_INFINITY) scheduleAt(next)
   } finally {
     pumping = false
+    // Anything that asked for a frame mid-pump is owed one now.
+    if (kicked) {
+      kicked = false
+      scheduleAt(0)
+    }
   }
 }
 
 /** Runs the loop now, from outside it. */
 function kick() {
-  if (pumping) return
+  if (pumping) {
+    kicked = true
+    return
+  }
   scheduleAt(0)
 }
 
@@ -809,11 +988,12 @@ export function subscribeToSource(
     release() {
       subscribers.delete(subscriber)
       if (subscribers.size > 0) return
-      if (timer !== undefined) {
-        window.clearTimeout(timer)
-        timer = undefined
-        wakeAt = Number.POSITIVE_INFINITY
-      }
+      // Both forms of pending wake, not just the timer: a wake already aligned
+      // to an animation frame would otherwise survive the last mirror, and the
+      // moment it holds in `wakeAt` would make the next `scheduleAt` decide it
+      // had nothing sooner to offer and return.
+      unschedule()
+      wakeAt = Number.POSITIVE_INFINITY
       for (const [element, state] of sources) forget(element, state)
     },
   }

@@ -1,6 +1,9 @@
+'use client'
+
+import { useMirrorVersion } from '@/components/demo/mirror'
 import { Card } from '@/components/ui/card'
 
-const PROPS = [
+const CAPTURE = [
   {
     name: 'source',
     type: 'Element | RefObject | string',
@@ -29,20 +32,9 @@ const PROPS = [
     description:
       'Bitmap pixels captured per CSS pixel. Lower is cheaper, higher is sharper when displayed large.',
   },
-  {
-    name: 'objectFit',
-    type: 'ObjectFit',
-    default: "'fill'",
-    description:
-      'How the bitmap fits the canvas box once CSS gives the canvas both a width and a height.',
-  },
-  {
-    name: 'objectPosition',
-    type: 'string',
-    default: "'center'",
-    description:
-      'Alignment of the bitmap when objectFit crops or letterboxes it.',
-  },
+]
+
+const PAINT = [
   {
     name: 'background',
     type: 'string | null',
@@ -59,7 +51,40 @@ const PROPS = [
   },
 ]
 
+// Where the two versions differ, they differ about the box: version 1 fits a
+// capture to whatever box CSS gives the canvas, version 2 takes the source's
+// own box as its size and paints past it.
+const FITTING = [
+  {
+    name: 'objectFit',
+    type: 'ObjectFit',
+    default: "'fill'",
+    description:
+      'How the bitmap fits the canvas box once CSS gives the canvas both a width and a height.',
+  },
+  {
+    name: 'objectPosition',
+    type: 'string',
+    default: "'center'",
+    description:
+      'Alignment of the bitmap when objectFit crops or letterboxes it.',
+  },
+]
+
+const BLEEDING = [
+  {
+    name: 'objectPosition',
+    type: 'string',
+    default: "'center'",
+    description:
+      'Where the source’s box sits when CSS gives the mirror a box of a different ratio. Keywords, percentages and pixels, as in CSS.',
+  },
+]
+
 export function PropsReference() {
+  const { version } = useMirrorVersion()
+  const props = [...CAPTURE, ...(version === 1 ? FITTING : BLEEDING), ...PAINT]
+
   return (
     <Card className="overflow-x-auto py-0">
       <table className="w-full min-w-2xl border-collapse text-sm">
@@ -72,7 +97,7 @@ export function PropsReference() {
           </tr>
         </thead>
         <tbody>
-          {PROPS.map((prop) => (
+          {props.map((prop) => (
             <tr key={prop.name} className="border-b last:border-0">
               <td className="px-4 py-3 font-mono text-xs whitespace-nowrap">
                 {prop.name}

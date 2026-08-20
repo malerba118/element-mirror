@@ -3,7 +3,11 @@
 import * as React from 'react'
 import { PauseIcon, PlayIcon } from 'lucide-react'
 
-import { ElementMirror } from '@frostin/element-mirror'
+import {
+  Mirror,
+  useMirrorName,
+  useMirrorVersion,
+} from '@/components/demo/mirror'
 import { CodeBlock, Token } from '@/components/demo/section'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -37,6 +41,32 @@ export function VideoBackdropShowcase() {
   const [backdrop, setBackdrop] = React.useState(true)
   const [playing, setPlaying] = React.useState(true)
   const videoRef = React.useRef<HTMLVideoElement>(null)
+
+  const { version } = useMirrorVersion()
+  const name = useMirrorName()
+
+  // Covering a box of the wrong ratio is the one thing the two versions ask for
+  // differently, and this is the case that asks for it. Version 1 fills a box
+  // you give it, so the box is the container and `objectFit` says how to fill
+  // it. Version 2 keeps its source's ratio no matter what, so a minimum on each
+  // axis already describes the smallest box that covers, and the container's own
+  // overflow does the cropping — the same thing you would write for an oversized
+  // image. Both are then overscanned so the blur's soft edge stays out of sight.
+  const cover =
+    version === 1
+      ? {
+          objectFit: 'cover' as const,
+          className: 'pointer-events-none absolute inset-0 h-full w-full',
+          size: null,
+          transform: 'scale(1.15)',
+        }
+      : {
+          objectFit: undefined,
+          className:
+            'pointer-events-none absolute top-1/2 left-1/2 min-h-full min-w-full',
+          size: { width: 'auto', height: 'auto' } as const,
+          transform: 'translate(-50%, -50%) scale(1.15)',
+        }
 
   function togglePlayback() {
     const video = videoRef.current
@@ -73,18 +103,18 @@ export function VideoBackdropShowcase() {
             style={{ aspectRatio: aspect }}
           >
             {backdrop ? (
-              <ElementMirror
+              <Mirror
                 source={videoRef}
                 fps={12}
                 // The backdrop is blurred beyond recognition, so it does not
                 // need a crisp capture.
                 pixelRatio={0.5}
-                objectFit="cover"
-                className="pointer-events-none absolute inset-0 h-full w-full"
+                objectFit={cover.objectFit}
+                className={cover.className}
                 style={{
+                  ...cover.size,
                   filter: `blur(${blur}px) saturate(0.8) brightness(0.9)`,
-                  // Overscanned so the blur's soft edges stay outside the box.
-                  transform: 'scale(1.15)',
+                  transform: cover.transform,
                 }}
               />
             ) : null}
@@ -178,12 +208,14 @@ export function VideoBackdropShowcase() {
 
       <CodeBlock
         code={`<div className="relative aspect-video overflow-hidden">
-  <ElementMirror
+  <${name}
     source={videoRef}
-    objectFit="cover"
-    pixelRatio={0.5}
-    className="absolute inset-0 h-full w-full"
-    style={{ filter: 'blur(${blur}px)', transform: 'scale(1.15)' }}
+    pixelRatio={0.5}${version === 1 ? '\n    objectFit="cover"' : ''}
+    className="${cover.className.replace('pointer-events-none ', '')}"
+    style={{${cover.size ? "\n      width: 'auto',\n      height: 'auto'," : ''}
+      filter: 'blur(${blur}px)',
+      transform: '${cover.transform}',
+    }}
   />
   <video ref={videoRef} className="relative mx-auto h-full w-auto" ... />
 </div>`}

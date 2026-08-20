@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 
-import { ElementMirror } from '@frostin/element-mirror'
+import { Mirror, useMirrorName } from '@/components/demo/mirror'
 import { CodeBlock, Token } from '@/components/demo/section'
 import { Badge } from '@/components/ui/badge'
 import { Card, CardContent } from '@/components/ui/card'
@@ -77,6 +77,7 @@ export function DragGhostShowcase() {
   const [columns, setColumns] = React.useState(INITIAL)
   const [drag, setDrag] = React.useState<DragState | null>(null)
   const [over, setOver] = React.useState<ColumnId | null>(null)
+  const name = useMirrorName()
 
   const ghostRef = React.useRef<HTMLDivElement>(null)
   // Where in the card the pointer grabbed it, so the ghost sits under the
@@ -276,7 +277,7 @@ export function DragGhostShowcase() {
             drag.active ? 'demo-ghost-in' : 'opacity-0'
           )}
         >
-          <ElementMirror
+          <Mirror
             source={drag.element}
             fps={15}
             // No width or height, so the ghost takes the card's own size and
@@ -293,7 +294,7 @@ export function DragGhostShowcase() {
 
 {drag ? (
   <div ref={ghostRef} className="pointer-events-none fixed top-0 left-0">
-    <ElementMirror source={drag} fps={15} />
+    <${name} source={drag} fps={15} />
   </div>
 ) : null}`}
       />

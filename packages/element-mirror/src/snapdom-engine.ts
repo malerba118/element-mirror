@@ -31,6 +31,24 @@ export interface CaptureHandle {
   mainThreadMs: number
   /** Resolves when the canvas holds the frame; rejects if it never will. */
   settled: Promise<void>
+  /**
+   * Where the bitmap sits relative to the element, in the element's own CSS
+   * pixels: the bitmap's top-left at (originX, originY), and the element's
+   * painted box within the bitmap at (boxX, boxY) sized boxWidth × boxHeight.
+   *
+   * All zero and the element's own size for a plain capture. A capture widens
+   * for whatever paints outside the box — a rotation's corners, a shadow, a
+   * child's ring — and it does so per side, so this is the only way to lay the
+   * bitmap back over the element it came from.
+   */
+  geometry: {
+    originX: number
+    originY: number
+    boxX: number
+    boxY: number
+    boxWidth: number
+    boxHeight: number
+  }
 }
 
 /**
@@ -53,11 +71,26 @@ export async function capture(
     // cannot reach the page's fonts, so text is set in a fallback and every
     // line of it lands slightly wrong. Costs nothing measurable.
     embedFonts: true,
+    // A capture is the element's box, and a card's shadow or a child's ring is
+    // painted outside it: cloned, then clipped away, so a mirror lost the edge
+    // its source has. This widens the capture by as much ink as the subtree
+    // actually paints past the box — nothing at all for most elements, since
+    // the walk only measures what carries an outer effect.
+    outerShadows: 'subtree',
     exclude: [`[${IGNORE_ATTRIBUTE}]`],
   })
   const mainThreadMs = performance.now() - started
+  const meta = snapshot.meta
   return {
     mainThreadMs,
+    geometry: {
+      originX: meta?.originX ?? 0,
+      originY: meta?.originY ?? 0,
+      boxX: meta?.boxX ?? 0,
+      boxY: meta?.boxY ?? 0,
+      boxWidth: meta?.boxW ?? 0,
+      boxHeight: meta?.boxH ?? 0,
+    },
     // The fork draws straight into the pooled canvas (its `canvas` option),
     // so there is no per-frame copy out of a throwaway one.
     settled: snapshot.toCanvas({ canvas }).then(() => {}),

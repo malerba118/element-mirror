@@ -1,6 +1,6 @@
 'use client'
 
-import { ElementMirror } from '@frostin/element-mirror'
+import { Mirror } from '@/components/demo/mirror'
 import { MirrorSource } from '@/components/demo/mirror-source'
 import { CodeBlock } from '@/components/demo/section'
 import { Badge } from '@/components/ui/badge'
@@ -43,7 +43,7 @@ export function FrameRateShowcase() {
               </CardAction>
             </CardHeader>
             <CardContent className="space-y-3">
-              <ElementMirror
+              <Mirror
                 source={`#${SOURCE_ID}`}
                 fps={rate}
                 style={{ width: '100%', height: 'auto' }}

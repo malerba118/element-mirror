@@ -2,8 +2,8 @@
 
 import * as React from 'react'
 
-import { ElementMirror } from '@frostin/element-mirror'
 import { Stat, useCaptureStats } from '@/components/demo/capture-stats'
+import { Mirror } from '@/components/demo/mirror'
 import { MirrorSource } from '@/components/demo/mirror-source'
 import { Token } from '@/components/demo/section'
 import {
@@ -67,7 +67,7 @@ export function SharingShowcase() {
           </CardHeader>
           <CardContent className="flex flex-wrap items-start gap-3">
             {Array.from({ length: mirrors }, (_, index) => (
-              <ElementMirror
+              <Mirror
                 key={index}
                 source={index % 2 === 0 ? `#${SOURCE_ID}` : sourceRef}
                 fps={FPS}

@@ -2,6 +2,8 @@ import { CaptureStatsBadge } from '@/components/demo/capture-stats'
 import { DelayShowcase } from '@/components/demo/delay-showcase'
 import { DragGhostShowcase } from '@/components/demo/drag-ghost-showcase'
 import { FrameRateShowcase } from '@/components/demo/frame-rate-showcase'
+import { ByVersion } from '@/components/demo/mirror'
+import { MirrorVersionToggle } from '@/components/demo/mirror-version-toggle'
 import { Playground } from '@/components/demo/playground'
 import { PropsReference } from '@/components/demo/props-reference'
 import { Section, Token } from '@/components/demo/section'
@@ -23,6 +25,7 @@ export default function Home() {
           </span>
           <div className="flex items-center gap-3">
             <CaptureStatsBadge />
+            <MirrorVersionToggle />
             <ThemeToggle />
           </div>
         </div>
@@ -37,12 +40,28 @@ export default function Home() {
             A live mirror of any DOM element
           </h1>
           <p className="text-base text-muted-foreground">
-            <Token>ElementMirror</Token> repaints another element into a{' '}
-            <Token>&lt;canvas&gt;</Token> a few times a second. The canvas sizes
-            like an <Token>&lt;img&gt;</Token> of the source: leave it alone and
-            it takes the source&apos;s own size, give it a width and it keeps
-            the ratio, give it both dimensions and <Token>objectFit</Token>{' '}
-            decides between cropping and letterboxing.
+            <ByVersion
+              one={<Token>ElementMirror</Token>}
+              two={<Token>ElementMirror2</Token>}
+            />{' '}
+            repaints another element into a <Token>&lt;canvas&gt;</Token> a few
+            times a second. It sizes like an <Token>&lt;img&gt;</Token> of the
+            source: leave it alone and it takes the source&apos;s own size, give
+            it a width and it keeps the ratio,{' '}
+            <ByVersion
+              one={
+                <>
+                  give it both dimensions and <Token>objectFit</Token> decides
+                  between cropping and letterboxing.
+                </>
+              }
+              two={
+                <>
+                  give it both dimensions and it keeps the ratio anyway, since a
+                  mirror is a picture of a box the source drew for itself.
+                </>
+              }
+            />
           </p>
         </div>
 
@@ -63,7 +82,13 @@ export default function Home() {
 
         <Section
           title="It sizes like an image"
-          description="The same source, mirrored four ways. There is no sizing prop: CSS decides, and the source only supplies the natural size and ratio to fall back on."
+          description={
+            <>
+              The same source, mirrored several ways. There is no sizing prop:
+              CSS decides, and the source only supplies the natural size and
+              ratio to fall back on.
+            </>
+          }
         >
           <SizingShowcase />
         </Section>
@@ -75,9 +100,21 @@ export default function Home() {
               A portrait video in a landscape container leaves empty bars. The
               usual fix is to fill them with a scaled-up, blurred copy of the
               video, and a mirror is that copy:{' '}
-              <Token>objectFit=&quot;cover&quot;</Token> blows the capture up
-              past the container, and it is a canvas, so a CSS{' '}
-              <Token>filter</Token> blurs it.
+              <ByVersion
+                one={
+                  <>
+                    <Token>objectFit=&quot;cover&quot;</Token> blows the capture
+                    up past the container
+                  </>
+                }
+                two={
+                  <>
+                    sized past the container the way you would size any
+                    oversized image
+                  </>
+                }
+              />
+              , and it is a canvas, so a CSS <Token>filter</Token> blurs it.
             </>
           }
         >
@@ -161,7 +198,12 @@ export default function Home() {
 
         <Section
           title="Props"
-          description="Everything else is forwarded to the underlying canvas, and the ref points at it."
+          description={
+            <ByVersion
+              one="Everything else is forwarded to the underlying canvas, and the ref points at it."
+              two="Everything else is forwarded to the element that holds the mirror's box, and the ref points at it. The canvas inside is out of flow, since what it paints is not what the mirror occupies."
+            />
+          }
         >
           <PropsReference />
         </Section>

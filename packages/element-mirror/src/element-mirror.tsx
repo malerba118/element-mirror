@@ -192,10 +192,29 @@ export const ElementMirror = React.forwardRef<
       delay,
       pixelRatio,
       isActive: () => onScreen,
-      onFrame(bitmap, sourceWidth, sourceHeight) {
-        if (canvas.width !== bitmap.width || canvas.height !== bitmap.height) {
-          canvas.width = bitmap.width
-          canvas.height = bitmap.height
+      onFrame(bitmap, sourceWidth, sourceHeight, geometry) {
+        // The part of the bitmap that is the source's own painted box. A capture
+        // reaches past that box for whatever paints outside it, and this mirror
+        // is that box and nothing else — it fills the canvas with the bitmap and
+        // has no room to put an overhang in. Taking the box out keeps it the
+        // size and the scale it always was; painted overflow is what version 2
+        // is for.
+        const ratio = geometry.pixelRatio
+        const box = {
+          x: geometry.boxX * ratio,
+          y: geometry.boxY * ratio,
+          width: geometry.boxWidth * ratio,
+          height: geometry.boxHeight * ratio,
+        }
+        // A canvas is a whole number of pixels, and a painted box is not: a
+        // rotated one is fractional every time. Assigning the fraction truncates
+        // it, so comparing against what was asked for would never match and the
+        // canvas would be reallocated — and cleared — on every frame.
+        const width = Math.round(box.width)
+        const height = Math.round(box.height)
+        if (canvas.width !== width || canvas.height !== height) {
+          canvas.width = width
+          canvas.height = height
         }
         const context = canvas.getContext('2d')
         if (!context) return
@@ -205,7 +224,17 @@ export const ElementMirror = React.forwardRef<
           context.fillStyle = fill
           context.fillRect(0, 0, canvas.width, canvas.height)
         }
-        context.drawImage(bitmap, 0, 0)
+        context.drawImage(
+          bitmap,
+          box.x,
+          box.y,
+          box.width,
+          box.height,
+          0,
+          0,
+          canvas.width,
+          canvas.height
+        )
 
         if (!hasFrameRef.current) {
           hasFrameRef.current = true

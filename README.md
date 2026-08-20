@@ -58,8 +58,12 @@ wearing a perf win's clothes.
 plus focused checks: dirty-detection (`dirty.mjs`), idle cost (`idle.mjs`),
 delay accuracy (`lag.mjs`), pause semantics (`paused.mjs`), first-frame
 waiting on loading media sources (`settle.mjs`), drag ghosts (`drag.mjs`),
-overflow fidelity (`overflow.mjs`), page-wide smoke (`smoke.mjs`), and
-per-section cost attribution (`cost.mjs`, `bench.mjs`).
+overflow fidelity (`overflow.mjs`), transformed sources (`transform.mjs`),
+paint outside the layout box (`bleed.mjs`), ink a mirror loses just outside its
+box, which the gallery diff crops away on both sides (`edges.mjs`), page-wide
+smoke (`smoke.mjs`), and
+per-section cost attribution (`cost.mjs`, `bench.mjs`). `versions.mjs` shoots
+the demo under both mirror implementations for eyeballing side by side.
 All need the demo dev server up. `MIRROR_SNAPDOM=npm` points `snapdom.mjs` at
 the published `@zumer/snapdom` as the unforked baseline.
 

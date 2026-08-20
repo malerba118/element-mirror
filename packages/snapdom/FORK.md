@@ -68,6 +68,26 @@ actually receives.
 - **The used-tag walk is memoized per capture root** (`src/core/capture.js`,
   PERF-6), validated by the root's style stamp, since the tag set only changes
   when nodes are added or removed and any such mutation stamps the root.
+- **`outerShadows: 'subtree'` widens the capture by what DESCENDANTS paint
+  outside the root's box** (`measureSubtreeBleed` in
+  `src/utils/transforms.helpers.js`, used by `src/core/capture.js`). A capture is
+  the root's box, so a ring or a shadow drawn against the root's edge — a card
+  whose own `ring-1` is a `box-shadow` on the card, mirrored from a wrapper
+  around it — was cloned and then clipped away by the viewBox, and the mirror
+  lost an edge its source has. The walk only measures elements that carry an
+  outer effect (four string reads decide), reuses the styles the clone pass
+  already read, and honours ancestors that clip: a shadow inside
+  `overflow: hidden` never escapes it, which is also what keeps a scrolled
+  container's offscreen rows from widening anything. Bleed is per side, so
+  nothing is padded on the chance that something overhangs.
+- **A capture reports its own geometry** (`result.meta`, `src/api/snapdom.js`).
+  `originX`/`originY` place the raster's top-left relative to the element's own,
+  and `boxX`/`boxY`/`boxW`/`boxH` say where the element's painted box landed
+  inside it. Everything that widens a region — a rotated bbox, a shadow, a
+  descendant's ring, the pad — does so unevenly, and a caller drawing the raster
+  back over the live element cannot work that out from the size. `ElementMirror`
+  places every frame by these; `.perf/bleed.mjs` measures the result against the
+  source it came from.
 - **The computed declaration's length is read once per element rather than once
   per property.** A live `CSSStyleDeclaration` answers `length` by going back
   into style, and the property loop asked on every iteration: about fifteen

@@ -31,7 +31,7 @@ import { normalizeCachePolicy } from './cache.js'
  * @param {string}  [options.filename]
  * @param {unknown} [options.cache] // "disabled"|"full"|"auto"|"soft"
  * @param {boolean} [options.outerTransforms] // NEW
- * @param {boolean} [options.outerShadows]      // NEW
+ * @param {boolean|"subtree"} [options.outerShadows]      // NEW — 'subtree' also widens for descendants' outer ink
  * @param {"viewport"|{x:number,y:number,width:number,height:number}|null} [options.clip] - Capture only a region: 'viewport' (what the user currently sees) or a page-coordinate rect. Offscreen subtrees are pruned before styling/inlining, so this is faster than a full capture.
  * @param {RegExp|((prop: string) => boolean)} [options.excludeStyleProps] - Skip props when snapshotting (#348). e.g. /^--/ to exclude CSS vars
  * @param {boolean} [options.resolvePicturePlaceholders] - Resolve &lt;picture&gt; placeholders / lazy data-src before clone (default true)

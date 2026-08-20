@@ -2,7 +2,7 @@
 
 import * as React from 'react'
 
-import { ElementMirror } from '@frostin/element-mirror'
+import { Mirror } from '@/components/demo/mirror'
 import { cn } from '@/lib/utils'
 
 /**
@@ -231,7 +231,7 @@ export function Specimen({
       {view === 'split' ? (
         <div className="grid grid-cols-2 items-start gap-4">
           {source}
-          <ElementMirror
+          <Mirror
             source={sourceRef}
             fps={fps}
             background={background}
@@ -244,7 +244,7 @@ export function Specimen({
           style={gain > 1 ? { filter: `brightness(${gain})` } : undefined}
         >
           {source}
-          <ElementMirror
+          <Mirror
             source={sourceRef}
             fps={fps}
             background={background}
