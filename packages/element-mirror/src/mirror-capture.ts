@@ -251,6 +251,8 @@ interface SourceState {
   costMs: number
   /** Playback positions of any videos, to notice frames advancing. */
   videoSignature: string
+  /** Whether the last selectionchange saw the selection touch this source. */
+  hadSelection: boolean
   lastSeenAt: number
   /** When this source was first wanted, bounding the first-frame wait. */
   wantedSince: number
@@ -272,6 +274,7 @@ function stateFor(element: Element, now: number) {
       lastCaptureAt: 0,
       costMs: 0,
       videoSignature: '',
+      hadSelection: false,
       lastSeenAt: now,
       wantedSince: now,
       mutation: new MutationObserver(() => {
@@ -322,6 +325,34 @@ function forget(element: Element, state: SourceState) {
   state.resize.disconnect()
   state.unlisten()
   sources.delete(element)
+}
+
+/** Whether any part of the current selection lies within the element. */
+function selectionTouches(selection: Selection | null, element: Element) {
+  // A text field's selection lives on the field rather than in a Range, and
+  // is painted only while the field is focused — which also means the focused
+  // field is the only one whose selection can be showing.
+  const active = document.activeElement
+  if (
+    active &&
+    element.contains(active) &&
+    (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)
+  ) {
+    try {
+      if (active.selectionStart !== active.selectionEnd) return true
+    } catch {
+      // An input type without a selection API cannot show one.
+    }
+  }
+  if (!selection || selection.isCollapsed) return false
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    try {
+      if (selection.getRangeAt(index).intersectsNode(element)) return true
+    } catch {
+      // A range from a foreign tree cannot touch this element.
+    }
+  }
+  return false
 }
 
 /** The element itself plus any descendants matching the selector. */
@@ -1003,6 +1034,25 @@ function ensureGlobalListeners() {
       attributeFilter: ['class', 'style'],
     })
   }
+
+  // A text selection is painted over the source without touching the DOM, so
+  // no observer sees it and no repaint event fires on the source — and the
+  // engine captures the highlight (see snapdom-engine), so a mirror owes a
+  // frame for it. A source re-captures when the selection touches it, and once
+  // more when the selection leaves, which is what removes the highlight.
+  document.addEventListener('selectionchange', () => {
+    const selection = document.getSelection()
+    let changed = false
+    for (const [element, state] of sources) {
+      const touches = selectionTouches(selection, element)
+      if (touches || state.hadSelection) {
+        state.hadSelection = touches
+        state.dirty = true
+        changed = true
+      }
+    }
+    if (changed) kick()
+  })
 
   // A webfont swapping in restyles text everywhere at once, and nothing about
   // that reaches an observer watching the source.

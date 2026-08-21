@@ -77,6 +77,12 @@ export async function capture(
     // actually paints past the box — nothing at all for most elements, since
     // the walk only measures what carries an outer effect.
     outerShadows: 'subtree',
+    // A text selection is paint the DOM cannot carry — the browser draws the
+    // highlight at paint time — so a clone loses it and a mirror of selected
+    // text looked unselected. The fork wraps selected runs in the styles the
+    // browser paints them with: authored ::selection where a rule matches,
+    // the UA highlight color where none does.
+    captureSelection: true,
     exclude: [`[${IGNORE_ATTRIBUTE}]`],
   })
   const mainThreadMs = performance.now() - started

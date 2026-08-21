@@ -123,6 +123,20 @@ export interface SnapdomOptions {
   outerShadows?: boolean | "subtree";
 
   /**
+   * Render the user's live text selection into the capture (fork addition,
+   * SEL-1 in FORK.md): selected runs of text are wrapped in the styles the
+   * browser paints them with — authored `::selection` color, background,
+   * text-shadow and text-decoration where a rule matches, the UA highlight
+   * color where none does. A focused <input>/<textarea>'s selection is
+   * painted too, as highlight layers behind the value — for the input types
+   * that expose the selection API (text, search, url, tel, password); an
+   * email or number input paints a highlight the platform refuses to report,
+   * so nothing can be rendered for it. Selections inside shadow roots are not
+   * rendered. Default false.
+   */
+  captureSelection?: boolean;
+
+  /**
    * Capture only a region instead of the full element: `'viewport'` (what the user
    * currently sees) or a page-coordinate rect. Offscreen subtrees are pruned before
    * styling/inlining, so this is faster than a full capture. Default null (no clip).

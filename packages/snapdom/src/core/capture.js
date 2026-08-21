@@ -16,6 +16,7 @@ import { lineClampTree } from '../modules/lineClamp.js'
 import { runHook, getGlobalPlugins, normalizePlugin } from './plugins.js'
 import { runPictureResolverBeforeClone } from '../modules/pictureResolver.js'
 import { compressCloneAssets } from '../modules/compress.js'
+import { applyTextFieldSelectionLayers } from '../modules/selection.js'
 import {
   stripRootShadows,
   neutralizeRootMarginCollapse,
@@ -230,6 +231,16 @@ export async function captureDOM(element, options) {
     // Perceptual image downsampling (on by default via `compress`). No-op when off.
     if (options.compress) {
       await runIdle(() => compressCloneAssets(state.clone, state.options, state.nodeMap))
+    }
+    // SEL-1: field-selection highlights compose last — the background pass
+    // above rewrites a field's background longhands, and an inlined url()
+    // background has to end up under the highlight.
+    if (options.captureSelection) {
+      try {
+        applyTextFieldSelectionLayers(state.nodeMap)
+      } catch (e) {
+        console.warn('[snapdom] field selection compose failed:', e)
+      }
     }
   })()
 

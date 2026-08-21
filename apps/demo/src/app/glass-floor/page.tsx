@@ -1179,9 +1179,18 @@ export default function GlassFloorPage() {
                 className="flex items-center gap-2 rounded-[18px] border border-white/10 bg-white/3 p-1.5 shadow-[inset_0_2px_4px_rgba(0,0,0,0.45)] transition-[border-color,box-shadow] duration-180 focus-within:border-[rgba(199,210,254,0.6)] focus-within:shadow-[inset_0_2px_4px_rgba(0,0,0,0.45),0_0_0_3px_rgba(165,180,252,0.14)]"
                 onSubmit={submit}
               >
+                {/* type="text" rather than "email": the selection API — and
+                    with it the mirror's selection capture — only applies to
+                    text/search/url/tel/password inputs. An email input paints
+                    a highlight the platform refuses to report (selectionStart
+                    is null even mid-selection), so the reflection could never
+                    show it. inputMode keeps the email keyboard on touch. */}
                 <input
                   id="email"
-                  type="email"
+                  type="text"
+                  inputMode="email"
+                  autoCapitalize="none"
+                  spellCheck={false}
                   placeholder="you@studio.com"
                   aria-label="Email address"
                   autoComplete="off"

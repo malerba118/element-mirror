@@ -32,6 +32,7 @@ import { normalizeCachePolicy } from './cache.js'
  * @param {unknown} [options.cache] // "disabled"|"full"|"auto"|"soft"
  * @param {boolean} [options.outerTransforms] // NEW
  * @param {boolean|"subtree"} [options.outerShadows]      // NEW — 'subtree' also widens for descendants' outer ink
+ * @param {boolean} [options.captureSelection] // SEL-1 (fork) — render the user's live text selection into the capture
  * @param {"viewport"|{x:number,y:number,width:number,height:number}|null} [options.clip] - Capture only a region: 'viewport' (what the user currently sees) or a page-coordinate rect. Offscreen subtrees are pruned before styling/inlining, so this is faster than a full capture.
  * @param {RegExp|((prop: string) => boolean)} [options.excludeStyleProps] - Skip props when snapshotting (#348). e.g. /^--/ to exclude CSS vars
  * @param {boolean} [options.resolvePicturePlaceholders] - Resolve &lt;picture&gt; placeholders / lazy data-src before clone (default true)
@@ -89,6 +90,13 @@ export function createContext(options = {}) {
     // NEW flags (user-friendly)
     outerTransforms: options.outerTransforms ?? true,
     outerShadows: options.outerShadows ?? false,
+
+    // SEL-1 (fork): render the user's live text selection into the capture —
+    // selected runs of text are wrapped in the styles the browser paints them
+    // with (authored ::selection where a rule matches, the UA highlight color
+    // where none does). Opt-in: a screenshot taken while the user happens to
+    // have text selected should look selected only when the caller wants it to.
+    captureSelection: options.captureSelection ?? false,
 
     // Layout reconciliation: measure the styled clone in-document and pin diverging boxes
     // to their live size. Opt-in (adds one in-document layout of the clone).
