@@ -29,6 +29,12 @@ import {
  * which turns a hole in the detection into a moment of staleness rather than a
  * mirror that is wrong until something else happens to it.
  *
+ * A detected change also wakes the loop and is captured on the frame it
+ * happened rather than at the next slot on the fps grid, which would hold a
+ * discrete change — a focus ring, a keystroke — unshown for up to a whole
+ * interval. The cadence rebases to the change, so `fps` stays a rate cap and
+ * stops being a latency floor (see pump).
+ *
  * Capturing and presenting are separate. Captures accumulate in a per-source
  * timeline, and each mirror is drawn the frame matching its own `delay`, so a
  * mirror running behind the source has a new frame to show whenever one ages
@@ -269,10 +275,10 @@ function stateFor(element: Element, now: number) {
       lastSeenAt: now,
       wantedSince: now,
       mutation: new MutationObserver(() => {
-        created.dirty = true
+        markDirty()
       }),
       resize: new ResizeObserver(() => {
-        created.dirty = true
+        markDirty()
       }),
       unlisten: () => {},
     }
@@ -284,8 +290,16 @@ function stateFor(element: Element, now: number) {
     })
     created.resize.observe(element)
 
+    // Waking the loop is what lets a change be captured on the frame it
+    // happened rather than at the next slot on the fps grid (see pump, which
+    // pulls a dirty source's subscribers forward). Referenced by the observers
+    // above, which is safe: they cannot fire before this line runs.
     const markDirty = () => {
+      // Dev-only breadcrumb; .perf/latency-grid.mjs measures the distance
+      // from this mark to the capture it provokes.
+      if (process.env.NODE_ENV !== 'production') performance.mark('em:dirty')
       created.dirty = true
+      kick()
     }
     for (const type of REPAINT_EVENTS) {
       element.addEventListener(type, markDirty, REPAINT_LISTENER)
@@ -428,10 +442,18 @@ function unschedule() {
  * apart, then one three refreshes later. Waking on an animation frame instead
  * quantises the loop to the display, which is what makes a rate below the
  * refresh rate look steady rather than merely be steady.
+ *
+ * `immediate` skips that alignment and wakes on the next task instead, which
+ * is for reacting rather than pacing: a change just happened, and an animation
+ * frame is the better part of a refresh away — further on a page whose frames
+ * are long, which is exactly the page that needs the head start. Alignment
+ * buys nothing here, because a lone reactive capture has no cadence to keep
+ * steady, and a capture finished mid-frame just sits until the next paint
+ * carries it out.
  */
-function scheduleAt(time: number) {
+function scheduleAt(time: number, immediate = false) {
   if (timer !== undefined || frame !== undefined) {
-    if (time >= wakeAt) return
+    if (time >= wakeAt && !immediate) return
     unschedule()
   }
   wakeAt = time
@@ -441,6 +463,11 @@ function scheduleAt(time: number) {
     frame = undefined
     wakeAt = Number.POSITIVE_INFINITY
     void pump()
+  }
+
+  if (immediate) {
+    timer = window.setTimeout(run, 0)
+    return
   }
 
   const delay = time - performance.now()
@@ -620,6 +647,7 @@ async function capture(
   element: Element,
   state: SourceState,
   due: MirrorSubscriber[],
+  all: MirrorSubscriber[],
   now: number
 ) {
   // One layout read per capture, shared by every mirror of this element.
@@ -668,8 +696,14 @@ async function capture(
     return null
   }
 
+  // Every mirror of the source has a say in the density, not just the ones due
+  // this cycle: the frame joins a timeline all of them read from, so it has to
+  // satisfy the most demanding one whenever it is the newest frame there is.
+  // Asking only the due list let a coarse mirror on a slow clock drop a
+  // low-resolution frame into shared history, which the fine ones then had to
+  // show until the next capture — a flicker at the coarse mirror's rate.
   const pixelRatio = Math.max(
-    ...due.map(
+    ...all.map(
       (subscriber) => subscriber.pixelRatio ?? window.devicePixelRatio ?? 1
     )
   )
@@ -698,6 +732,9 @@ async function capture(
     return null
   }
   state.lastCaptureAt = performance.now()
+  if (process.env.NODE_ENV !== 'production') {
+    performance.measure('em:main', { start: started, end: state.lastCaptureAt })
+  }
   // What throttling is protecting is the main thread, so the engine reports
   // its own work apart from time spent awaiting the browser's rasterizer, and
   // only the work is billed. SnapDOM decodes its SVG off-thread: billing the
@@ -726,6 +763,9 @@ async function capture(
   state.timeline.push(frame)
   handle.settled.then(
     () => {
+      if (process.env.NODE_ENV !== 'production') {
+        performance.measure('em:settled', { start: started })
+      }
       frame.ready = true
       // The mirrors this capture was for get it the moment it lands rather
       // than at their next scheduled cycle. The shownAt guard keeps this from
@@ -842,7 +882,7 @@ async function serviceSource(
   const now = performance.now()
   const state = stateFor(element, now)
 
-  const retryAt = await capture(element, state, due, now)
+  const retryAt = await capture(element, state, due, all, now)
 
   const painted = performance.now()
   present(due, state, painted)
@@ -885,8 +925,24 @@ async function pump() {
       // running on a paint, and holding the frame back would only land it on
       // the following paint anyway, a whole refresh later.
       if (state.nextDueAt > now + FRAME_MS / 2) {
-        next = Math.min(next, state.nextDueAt)
-        continue
+        // Unless the source just changed. A slot on the fps grid is the right
+        // cadence for content that changes continuously, but for a discrete
+        // change — a focus ring, a keystroke — it is pure latency: the change
+        // sits captured-but-unshown for up to a whole interval. So a dirty
+        // source pulls its subscribers forward, and the cadence is rebased to
+        // now, which keeps the rate at fps and merely aligns its phase with
+        // the change. Only once a full interval has passed since the last
+        // capture, so a stream of events cannot exceed the asked-for rate.
+        const interval = subscriber.fps > 0 ? 1000 / subscriber.fps : Infinity
+        const changed =
+          sources.get(element)?.dirty === true &&
+          now - (sources.get(element)?.lastCaptureAt ?? 0) >=
+            interval - FRAME_MS / 2
+        if (!changed) {
+          next = Math.min(next, state.nextDueAt)
+          continue
+        }
+        state.nextDueAt = now
       }
       bucket.due.push(subscriber)
     }
@@ -911,18 +967,18 @@ async function pump() {
     // Anything that asked for a frame mid-pump is owed one now.
     if (kicked) {
       kicked = false
-      scheduleAt(0)
+      scheduleAt(0, true)
     }
   }
 }
 
-/** Runs the loop now, from outside it. */
+/** Runs the loop now, from outside it. Something happened, so no alignment. */
 function kick() {
   if (pumping) {
     kicked = true
     return
   }
-  scheduleAt(0)
+  scheduleAt(0, true)
 }
 
 let globalListeners = false
