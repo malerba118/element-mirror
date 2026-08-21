@@ -251,6 +251,12 @@ interface SourceState {
   costMs: number
   /** Playback positions of any videos, to notice frames advancing. */
   videoSignature: string
+  /**
+   * The descendants the liveness check asks about, kept rather than queried
+   * every cycle. Dropped when a mutation could have changed which nodes match,
+   * which the observer below already hears about.
+   */
+  nodes: { videos: HTMLVideoElement[]; canvases: Element[] } | null
   /** Whether the last selectionchange saw the selection touch this source. */
   hadSelection: boolean
   lastSeenAt: number
@@ -274,10 +280,24 @@ function stateFor(element: Element, now: number) {
       lastCaptureAt: 0,
       costMs: 0,
       videoSignature: '',
+      nodes: null,
       hadSelection: false,
       lastSeenAt: now,
       wantedSince: now,
-      mutation: new MutationObserver(() => {
+      mutation: new MutationObserver((records) => {
+        // The cached lookups answer "which videos, which canvases", so only a
+        // change of shape can invalidate them — plus a flip of the ignore
+        // attribute, which decides whether a canvas is a mirror's or the
+        // page's. Every other mutation leaves them correct.
+        for (const record of records) {
+          if (
+            record.type === 'childList' ||
+            record.attributeName === IGNORE_ATTRIBUTE
+          ) {
+            created.nodes = null
+            break
+          }
+        }
         markDirty()
       }),
       resize: new ResizeObserver(() => {
@@ -399,21 +419,72 @@ function mediaStillLoading(element: Element) {
   return false
 }
 
+/** The descendants the liveness check asks about, queried once per shape. */
+function nodesFor(state: SourceState, element: Element) {
+  let found = state.nodes
+  if (!found) {
+    found = {
+      videos: selfAndDescendants(element, 'video') as HTMLVideoElement[],
+      canvases: selfAndDescendants(
+        element,
+        `canvas:not([${IGNORE_ATTRIBUTE}])`
+      ),
+    }
+    state.nodes = found
+  }
+  return found
+}
+
+/**
+ * Elements with a running animation on them, read once per cycle of the loop.
+ *
+ * Asked of the document rather than of each source, and answered by
+ * containment. `getAnimations({ subtree: true })` walks the subtree it is
+ * asked about, so asking per source pays for the whole subtree once per source
+ * per cycle to learn something a page has only a handful of instances of;
+ * asking the document costs one walk however many sources read the answer.
+ *
+ * Cleared at the top of each pump. An animation that starts mid-cycle is
+ * therefore noticed on the next one, which is the same latency it already had:
+ * starting an animation marks nothing dirty, and this check is how it gets
+ * found at all.
+ *
+ * Blind to an animation running inside a source's shadow tree, as the subtree
+ * read was: Chrome reports those only from the animated element itself or from
+ * the shadow root, never from the host or the document (`.perf/shadow-probe.mjs`
+ * asks it). Such a source is left to the VERIFY_MS re-capture.
+ */
+let animated: Element[] | null = null
+
+function animatedElements() {
+  if (animated) return animated
+  const found: Element[] = []
+  for (const animation of document.getAnimations?.() ?? []) {
+    if (animation.playState !== 'running') continue
+    const effect = animation.effect
+    // A pseudo-element's animation reports the element it belongs to, which is
+    // the one whose paint changes, so it needs no special case.
+    const target = effect instanceof KeyframeEffect ? effect.target : null
+    if (target) found.push(target)
+  }
+  animated = found
+  return found
+}
+
 /**
  * Content that repaints without mutating the DOM, which a MutationObserver
  * cannot see: running CSS animations and transitions, playing video, and
  * canvases other than mirrors.
  */
 function hasLiveContent(state: SourceState, target: Element) {
-  const animations = target.getAnimations?.({ subtree: true }) ?? []
-  for (const animation of animations) {
-    if (animation.playState === 'running') return true
+  for (const element of animatedElements()) {
+    if (target.contains(element)) return true
   }
 
   // A video advancing is invisible to observers, and so is a seek while
   // paused, but both move currentTime. Comparing positions covers each case
   // without keeping a paused video's mirror capturing forever.
-  const videos = selfAndDescendants(target, 'video') as HTMLVideoElement[]
+  const { videos, canvases } = nodesFor(state, target)
   if (videos.length > 0) {
     const signature = videos.map((video) => video.currentTime).join(',')
     if (signature !== state.videoSignature) {
@@ -423,9 +494,7 @@ function hasLiveContent(state: SourceState, target: Element) {
   }
 
   // A canvas can repaint with no observable trace at all, so assume it did.
-  return (
-    selfAndDescendants(target, `canvas:not([${IGNORE_ATTRIBUTE}])`).length > 0
-  )
+  return canvases.length > 0
 }
 
 let timer: number | undefined
@@ -714,9 +783,7 @@ async function capture(
   // Marking the element dirty guarantees a capture once it recovers.
   if (
     state.timeline.length > 0 &&
-    (selfAndDescendants(element, 'video') as HTMLVideoElement[]).some(
-      cannotDrawVideo
-    )
+    nodesFor(state, element).videos.some(cannotDrawVideo)
   ) {
     state.dirty = true
     return null
@@ -929,6 +996,10 @@ async function pump() {
   try {
     // Nothing is painting while the tab is hidden; visibilitychange resumes.
     if (document.hidden) return
+
+    // One document-wide read of what is animating, shared by every source
+    // serviced in this cycle (see animatedElements).
+    animated = null
 
     const now = performance.now()
     let next = Number.POSITIVE_INFINITY
