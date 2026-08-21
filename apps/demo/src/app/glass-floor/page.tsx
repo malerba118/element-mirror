@@ -156,10 +156,20 @@ void main() {
 const FRAGMENT = `#version 300 es
 precision highp float;
 
-uniform sampler2D u_tex;
+// Two frames of the card, not one: captures land a dozen times a second while
+// this shader runs at display rate, so showing only the newest frame makes
+// the reflection step whenever one lands. Instead the water dissolves from
+// the frame before (A) to the newest (B) over roughly the gap between them,
+// and the steps disappear into the medium — water was never going to hold a
+// crisp image anyway. Each frame carries its own sub-rect, since the
+// capture's overhang differs frame to frame.
+uniform sampler2D u_texA; // outgoing frame
+uniform sampler2D u_texB; // incoming frame
 uniform vec2 u_quad;      // water canvas size, CSS px
 uniform vec4 u_card;      // card box in quad space: left, top, width, height
-uniform vec4 u_rect;      // card box within the texture: offset.xy, scale.xy
+uniform vec4 u_rectA;     // card box within texture A: offset.xy, scale.xy
+uniform vec4 u_rectB;     // card box within texture B: offset.xy, scale.xy
+uniform float u_mix;      // 0 = all A, 1 = all B
 uniform float u_time;
 uniform float u_ripple;   // 0..1
 uniform vec4 u_rings[8];  // rings: centre x, centre y, start time, amplitude
@@ -167,6 +177,20 @@ uniform int u_ringCount;
 
 in vec2 v_uv;
 out vec4 outColor;
+
+// One frame's contribution: the card sampled at depth-blurred lod, with a
+// ring's wavefront dispersing red and blue a hair apart along its push.
+vec4 sampleCard(sampler2D tex, vec4 rect, vec2 texUv, float lod,
+    vec2 ringDir, float push) {
+  vec2 st = rect.xy + texUv * rect.zw;
+  vec2 fringe = push > 0.001
+    ? ringDir * min(push * 0.35, 2.0) * (rect.zw / u_card.zw)
+    : vec2(0.0);
+  vec4 col = textureLod(tex, st, lod);
+  col.r = textureLod(tex, st + fringe, lod).r;
+  col.b = textureLod(tex, st - fringe, lod).b;
+  return col;
+}
 
 void main() {
   // Pixel position in the quad, y growing downwards from the water's edge.
@@ -208,7 +232,6 @@ void main() {
     outColor = vec4(0.0);
     return;
   }
-  vec2 st = u_rect.xy + texUv * u_rect.zw;
 
   // Progressive blur for free: the texture is mipmapped every upload, so the
   // waterline reads the full-resolution level and deeper water reads ever
@@ -219,16 +242,13 @@ void main() {
   float lod = (0.1 + 3.2 * smoothstep(0.0, 1.0, depth)) *
     (0.7 + 0.5 * u_ripple);
 
-  // A ring's wavefront disperses colour a little, like a prism edge: red and
-  // blue sampled a hair apart along the push direction, only where a ring is
-  // actually pushing.
   float push = length(ringDisp);
-  vec2 fringe = push > 0.001
-    ? (ringDisp / push) * min(push * 0.35, 2.0) * (u_rect.zw / u_card.zw)
-    : vec2(0.0);
-  vec4 col = textureLod(u_tex, st, lod);
-  col.r = textureLod(u_tex, st + fringe, lod).r;
-  col.b = textureLod(u_tex, st - fringe, lod).b;
+  vec2 ringDir = push > 0.001 ? ringDisp / push : vec2(0.0);
+  vec4 col = sampleCard(u_texB, u_rectB, texUv, lod, ringDir, push);
+  if (u_mix < 1.0) {
+    col = mix(sampleCard(u_texA, u_rectA, texUv, lod, ringDir, push),
+      col, u_mix);
+  }
 
   // Drowned towards black: everything is premultiplied, so one factor dims
   // and fades in the same breath. A whisper of dither keeps the long dark
@@ -386,16 +406,18 @@ type WaterRenderer = {
   draw: (options: {
     source: HTMLCanvasElement;
     /**
-     * Whether the source canvas holds pixels the texture does not. Uploading
-     * the card and rebuilding its mipmaps is the frame's biggest single cost,
-     * and frames land at capture rate while this loop runs at display rate —
-     * most iterations, the texture on the GPU is already right.
+     * Whether the source canvas holds pixels no texture does. Uploading the
+     * card and rebuilding its mipmaps is the frame's biggest single cost, and
+     * frames land at capture rate while this loop runs at display rate —
+     * most iterations, the textures on the GPU are already right.
      */
     upload: boolean;
     rect: [number, number, number, number];
     card: [number, number, number, number];
     time: number;
     ripple: number;
+    /** How far the newest frame has dissolved in over the one before, 0..1. */
+    mixAmount: number;
     rings: Float32Array;
     ringCount: number;
   }) => void;
@@ -413,34 +435,66 @@ function createWaterRenderer(canvas: HTMLCanvasElement): WaterRenderer | null {
 
   const built = buildProgram(gl, FRAGMENT);
 
-  const texture = gl.createTexture();
-  gl.bindTexture(gl.TEXTURE_2D, texture);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
-  gl.texParameteri(
-    gl.TEXTURE_2D,
-    gl.TEXTURE_MIN_FILTER,
-    gl.LINEAR_MIPMAP_LINEAR,
-  );
-  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+  // Ping-ponged: a fresh frame is uploaded over the older of the two, which
+  // then becomes the incoming side of the crossfade while the frame it
+  // replaced-in-role fades out. Each remembers the sub-rect of the card
+  // within it, since the capture's overhang differs frame to frame.
+  const makeTexture = () => {
+    const texture = gl.createTexture();
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(
+      gl.TEXTURE_2D,
+      gl.TEXTURE_MIN_FILTER,
+      gl.LINEAR_MIPMAP_LINEAR,
+    );
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    return texture;
+  };
   gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);
+  const textures = [makeTexture(), makeTexture()];
+  const rects: [number, number, number, number][] = [
+    [0, 0, 1, 1],
+    [0, 0, 1, 1],
+  ];
+  let front = 0;
 
   const uniform = (name: string) => gl.getUniformLocation(built.program, name);
   const locations = {
+    texA: uniform("u_texA"),
+    texB: uniform("u_texB"),
     quad: uniform("u_quad"),
     card: uniform("u_card"),
-    rect: uniform("u_rect"),
+    rectA: uniform("u_rectA"),
+    rectB: uniform("u_rectB"),
+    mix: uniform("u_mix"),
     time: uniform("u_time"),
     ripple: uniform("u_ripple"),
     rings: uniform("u_rings"),
     ringCount: uniform("u_ringCount"),
   };
+  gl.uniform1i(locations.texA, 0);
+  gl.uniform1i(locations.texB, 1);
 
   return {
-    draw({ source, upload, rect, card, time, ripple, rings, ringCount }) {
+    draw({
+      source,
+      upload,
+      rect,
+      card,
+      time,
+      ripple,
+      mixAmount,
+      rings,
+      ringCount,
+    }) {
       if (source.width === 0 || source.height === 0) return;
       gl.viewport(0, 0, gl.drawingBufferWidth, gl.drawingBufferHeight);
       if (upload) {
+        front = 1 - front;
+        gl.activeTexture(gl.TEXTURE1);
+        gl.bindTexture(gl.TEXTURE_2D, textures[front]);
         gl.texImage2D(
           gl.TEXTURE_2D,
           0,
@@ -450,10 +504,17 @@ function createWaterRenderer(canvas: HTMLCanvasElement): WaterRenderer | null {
           source,
         );
         gl.generateMipmap(gl.TEXTURE_2D);
+        rects[front] = rect;
       }
+      gl.activeTexture(gl.TEXTURE0);
+      gl.bindTexture(gl.TEXTURE_2D, textures[1 - front]);
+      gl.activeTexture(gl.TEXTURE1);
+      gl.bindTexture(gl.TEXTURE_2D, textures[front]);
       gl.uniform2f(locations.quad, canvas.clientWidth, canvas.clientHeight);
       gl.uniform4fv(locations.card, card);
-      gl.uniform4fv(locations.rect, rect);
+      gl.uniform4fv(locations.rectA, rects[1 - front]);
+      gl.uniform4fv(locations.rectB, rects[front]);
+      gl.uniform1f(locations.mix, mixAmount);
       gl.uniform1f(locations.time, time);
       gl.uniform1f(locations.ripple, ripple);
       gl.uniform4fv(locations.rings, rings);
@@ -466,7 +527,7 @@ function createWaterRenderer(canvas: HTMLCanvasElement): WaterRenderer | null {
       // Free what this init created, but never loseContext(): the canvas
       // keeps handing back the same context, so losing it would poison
       // every re-init — and any relayout (zoom, resize) re-inits.
-      gl.deleteTexture(texture);
+      for (const texture of textures) gl.deleteTexture(texture);
       built.dispose();
     },
   };
@@ -756,14 +817,34 @@ export default function GlassFloorPage() {
     return () => subscription.release();
   }, []);
 
+  // When the user last touched the card. The crossfade below is for ambient
+  // motion — the aurora drifting between captures — but a frame carrying a
+  // focus ring or a keystroke is an answer, and easing an answer in reads as
+  // lag. The render loop snaps any frame landing soon after one of these.
+  const interactedAt = React.useRef(0);
+  React.useEffect(() => {
+    const card = cardRef.current;
+    if (!card) return;
+    const note = () => {
+      interactedAt.current = performance.now();
+    };
+    const types = ["focusin", "focusout", "pointerdown", "keydown", "input"];
+    for (const type of types) card.addEventListener(type, note, true);
+    return () => {
+      for (const type of types) card.removeEventListener(type, note, true);
+    };
+  }, []);
+
   // The render loop: the feed mirror's canvas goes up as a texture and the
-  // shader redraws the water. The card's sub-rect within that canvas moves as
-  // the capture's overhang grows and shrinks, so it is read back from the two
-  // client rects rather than assumed — but only on frames that landed one,
-  // since that is the only time it can have moved. Frames where nothing can
-  // have changed — no new capture, ripple at zero, no live rings — draw
-  // nothing at all, with one settling draw after motion ends so the water is
-  // left flat rather than frozen mid-wave.
+  // shader redraws the water, dissolving each new frame in over the last so
+  // the reflection moves at display rate while captures land at theirs. The
+  // card's sub-rect within that canvas moves as the capture's overhang grows
+  // and shrinks, so it is read back from the two client rects rather than
+  // assumed — but only on frames that landed one, since that is the only time
+  // it can have moved. Frames where nothing can have changed — no new
+  // capture, no fade mid-flight, ripple at zero, no live rings — draw nothing
+  // at all, with one settling draw after motion ends so the water is left
+  // flat rather than frozen mid-wave.
   const waterReady = geo.width > 0;
   React.useEffect(() => {
     const water = waterRef.current;
@@ -777,12 +858,20 @@ export default function GlassFloorPage() {
     let uploaded = false;
     let settled = false;
     let rect: [number, number, number, number] = [0, 0, 1, 1];
+    // The crossfade between the two newest frames (see the fragment shader):
+    // each fresh frame starts a dissolve sized to the gap it arrived by, so
+    // the fade tends to finish right as the next frame lands and the
+    // reflection moves continuously at whatever rate captures come.
+    let landedAt = 0;
+    let fadeStart = 0;
+    let fadeMs = 0;
     let frame = 0;
     const tick = () => {
       frame = requestAnimationFrame(tick);
       const source = feed.querySelector("canvas");
       if (!source) return;
-      const now = performance.now() / 1000;
+      const nowMs = performance.now();
+      const now = nowMs / 1000;
       const state = live.current;
       // Three seconds outlives every ring's visible life; of what survives,
       // the newest eight ride along to the shader.
@@ -795,7 +884,20 @@ export default function GlassFloorPage() {
       state.rings = kept;
 
       const fresh = textureFresh.current && source.width > 0;
-      const animating = state.ripple > 0 || kept.length > 0;
+      if (fresh) {
+        // The first frame appears outright — there is nothing to fade from.
+        fadeMs = landedAt ? Math.min(Math.max(nowMs - landedAt, 50), 180) : 0;
+        // A frame arriving on the heels of an interaction is carrying its
+        // result — a focus ring, a typed character — and is shown almost
+        // outright. The window is generous because the frame lags the event
+        // by the whole pipeline: the capture's turn, the capture, the raster.
+        if (nowMs - interactedAt.current < 400) fadeMs = Math.min(fadeMs, 40);
+        fadeStart = nowMs;
+        landedAt = nowMs;
+      }
+      const mixAmount =
+        fadeMs > 0 ? Math.min(1, (nowMs - fadeStart) / fadeMs) : 1;
+      const animating = state.ripple > 0 || kept.length > 0 || mixAmount < 1;
       // Nothing to show until the first capture lands a texture.
       if (!uploaded && !fresh) return;
 
@@ -839,6 +941,7 @@ export default function GlassFloorPage() {
         card: [MARGIN, GAP, state.geo.width, state.geo.height],
         time: now,
         ripple: state.ripple / 100,
+        mixAmount,
         rings,
         ringCount,
       });
