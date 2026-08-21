@@ -1227,9 +1227,9 @@ export default function GlassFloorPage() {
                     show it. inputMode keeps the email keyboard on touch. */}
                 <input
                   ref={emailRef}
-                  id="email"
+                  // id="email"
                   type="text"
-                  inputMode="email"
+                  // inputMode="email"
                   autoCapitalize="none"
                   spellCheck={false}
                   placeholder="you@studio.com"
