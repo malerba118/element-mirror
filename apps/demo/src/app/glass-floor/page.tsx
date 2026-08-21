@@ -180,9 +180,17 @@ out vec4 outColor;
 
 // One frame's contribution: the card sampled at depth-blurred lod, with a
 // ring's wavefront dispersing red and blue a hair apart along its push.
+// texUv may run past 0..1: the capture holds more than the card's box — its
+// glow spills into the overhang around it — and cutting the reflection at
+// the box guillotined that glow into a hard right angle at each corner. So
+// the sample reaches into the overhang, and only the texture's own edge is
+// the end of the world.
 vec4 sampleCard(sampler2D tex, vec4 rect, vec2 texUv, float lod,
     vec2 ringDir, float push) {
   vec2 st = rect.xy + texUv * rect.zw;
+  if (any(lessThan(st, vec2(0.0))) || any(greaterThan(st, vec2(1.0)))) {
+    return vec4(0.0);
+  }
   vec2 fringe = push > 0.001
     ? ringDir * min(push * 0.35, 2.0) * (rect.zw / u_card.zw)
     : vec2(0.0);
@@ -225,10 +233,12 @@ void main() {
   }
 
   // Into the card's texture sub-rect, flipped: the water's edge shows the
-  // card's bottom edge.
+  // card's bottom edge. Not clipped to the card's box — the glow around the
+  // card reflects too (see sampleCard) — only cut off well past where any
+  // overhang could reach, to skip the arithmetic where nothing can be.
   vec2 cardUv = (px + disp + ringDisp - u_card.xy) / u_card.zw;
   vec2 texUv = vec2(cardUv.x, 1.0 - cardUv.y);
-  if (any(lessThan(texUv, vec2(0.0))) || any(greaterThan(texUv, vec2(1.0)))) {
+  if (any(lessThan(texUv, vec2(-0.6))) || any(greaterThan(texUv, vec2(1.6)))) {
     outColor = vec4(0.0);
     return;
   }
