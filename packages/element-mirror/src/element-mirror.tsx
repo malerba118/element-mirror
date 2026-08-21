@@ -51,9 +51,17 @@ export type ElementMirrorProps = Omit<
    * Mirrors of the same source share captures, and the mirror with
    * the highest fps determines the shared capture rate.
    *
+   * A function is read on every cycle of the capture loop, so the rate can
+   * follow something — say, a burst while the user is interacting — without
+   * re-subscribing. That matters because changing a numeric fps re-subscribes,
+   * and a fresh subscription captures immediately: a rate raised on
+   * pointerdown would spend the main thread capturing right as the
+   * interaction's own events need it. A function raising its answer costs
+   * nothing until the next change gives the loop a reason to capture.
+   *
    * @default 12
    */
-  fps?: number
+  fps?: number | (() => number)
 
   /**
    * How far behind the source this mirror runs, in milliseconds.
@@ -356,6 +364,14 @@ export const ElementMirror = React.forwardRef<
   const [hasFrame, setHasFrame] = React.useState(false)
   const hasFrameRef = React.useRef(false)
 
+  // Read by the subscriber's fps getter at every loop cycle, so a function
+  // rate is always the latest one passed — including a new function identity,
+  // which deliberately does not re-subscribe (see the prop doc). A numeric
+  // change still re-subscribes, via fpsKey below.
+  const fpsRef = React.useRef(fps)
+  fpsRef.current = fps
+  const fpsKey = typeof fps === 'function' ? 'live' : fps
+
   // The mirror's own content box, as CSS settled it, against which the
   // source's box is scaled and placed — plus where that box sits in the
   // padding box, which is what the canvas's offsets are measured from.
@@ -577,7 +593,11 @@ export const ElementMirror = React.forwardRef<
 
     const subscription = subscribeToSource({
       resolve: () => resolveSource(source),
-      fps: paused ? 0 : fps,
+      get fps() {
+        if (paused) return 0
+        const rate = fpsRef.current
+        return typeof rate === 'function' ? rate() : rate
+      },
       delay,
       pixelRatio,
       isActive: () => onScreen,
@@ -686,7 +706,7 @@ export const ElementMirror = React.forwardRef<
       intersection.disconnect()
       subscription.release()
     }
-  }, [source, fps, delay, pixelRatio, paused, fit])
+  }, [source, fpsKey, delay, pixelRatio, paused, fit])
 
   // The intrinsic size has to be settled before the first paint. Left to an
   // ordinary effect, the wrapper would lay out once at nothing, which reads as

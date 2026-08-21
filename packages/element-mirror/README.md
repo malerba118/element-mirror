@@ -31,7 +31,7 @@ at 2x) a capture costs ~5ms of main thread, and a mirror asked for 60fps gets
 | Prop             | Type                                              | Default            | Notes                                                                                                |
 | ---------------- | ------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------- |
 | `source`         | `Element \| RefObject<Element \| null> \| string` | —                  | The element to mirror, as an element, a ref, or a CSS selector.                                      |
-| `fps`            | `number`                                          | `12`               | Maximum captures per second, up to the display refresh rate.                                         |
+| `fps`            | `number \| () => number`                          | `12`               | Maximum captures per second, up to the display refresh rate. A function is read every capture cycle. |
 | `delay`          | `number`                                          | `0`                | Milliseconds behind the source to run.                                                               |
 | `pixelRatio`     | `number`                                          | `devicePixelRatio` | Bitmap pixels captured per CSS pixel.                                                                |
 | `objectPosition` | `string`                                          | `'center'`         | Where the source's box sits when CSS gives the mirror a box of a different ratio.                    |
@@ -261,6 +261,18 @@ what mutated. One loop drives every mirror on the page:
 A requested rate is what arrives: frames are booked from when the previous one
 was due, and the loop wakes on displayed frames, so a rate below the refresh
 rate looks steady rather than merely being steady.
+
+A discrete change — a keystroke, a focus ring, a selection — is captured ahead
+of the fps grid rather than waiting for the next slot, but never ahead of the
+mirror's own interval, so at a low idle rate the change can still sit unseen
+for most of one. That is what a function `fps` is for: return a higher rate
+for a beat after the user interacts and the change's own event finds the short
+interval already in force. The function form exists because merely *asking*
+must cost nothing — swapping a numeric `fps` re-subscribes, and a fresh
+subscription captures immediately, which spends the main thread at the exact
+moment the interaction's own events need it. The demo's glass-floor page runs
+15fps idle and 45fps for 400ms after a touch, which is what carries a
+double-click's highlight into the reflection within a frame or two.
 
 Mirror canvases carry `data-element-mirror-ignore`, so a mirror nested inside
 another capture is skipped rather than recursing visually.

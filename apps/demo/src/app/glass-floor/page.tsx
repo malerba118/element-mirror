@@ -74,6 +74,19 @@ const jetbrainsMono = JetBrains_Mono({
  */
 const FPS = 15;
 /**
+ * The rate while the user is touching the card. FPS above is the idle pulse,
+ * priced for running forever; an interaction is priced for 400ms. What the
+ * burst buys is latency rather than smoothness: a discrete change — a
+ * double-click's highlight, a focus ring — is captured ahead of the fps grid,
+ * but no further ahead than the asking mirror's own interval, so at 15fps the
+ * change can still sit unseen for a whole 66ms slot. Tripling the rate for the
+ * moment shrinks that worst case to ~22ms, and the engine's duty-cycle
+ * backpressure still bounds what the burst may cost.
+ */
+const BURST_FPS = 45;
+/** How long an interaction keeps the burst rate (and snaps frames in). */
+const BURST_MS = 400;
+/**
  * How far the card hovers above the water, so the reflection starts late.
  *
  * Counts twice everywhere, the way a mirror does: the image starts as far
@@ -811,32 +824,24 @@ export default function GlassFloorPage() {
   const surface = geo.top + geo.height + GAP;
   const { width: waterWidth, height: waterHeight } = waterBox(geo);
 
-  // Raised by a shadow subscriber whenever a frame of the card lands, so the
-  // render loop knows the one iteration where re-uploading the texture buys
-  // anything. It rides the same shared capture as the feed mirror — same
-  // element, same clock — so it costs no captures of its own.
-  const textureFresh = React.useRef(false);
-  React.useEffect(() => {
-    const subscription = subscribeToSource({
-      resolve: () => cardRef.current,
-      fps: FPS,
-      delay: 0,
-      // This one never reads the bitmap, only the fact that one arrived, so it
-      // asks for the least it can and lets the mirrors that do read it decide.
-      pixelRatio: BLOOM_RES,
-      isActive: () => true,
-      onFrame: () => {
-        textureFresh.current = true;
-      },
-    });
-    return () => subscription.release();
-  }, []);
-
   // When the user last touched the card. The crossfade below is for ambient
   // motion — the aurora drifting between captures — but a frame carrying a
   // focus ring or a keystroke is an answer, and easing an answer in reads as
-  // lag. The render loop snaps any frame landing soon after one of these.
+  // lag. The render loop snaps any frame landing soon after one of these, and
+  // the mirrors run at BURST_FPS for the same window (see the constant): the
+  // fps grid is most of the distance between a double-click and its highlight
+  // reaching the water. A ref and a rate function rather than state, very
+  // deliberately: noting the interaction must itself cost nothing — a
+  // re-render or re-subscription here would spend the main thread right as
+  // the interaction's own events (the second click of a double-click) need
+  // it. The raised rate takes effect when the change's own selectionchange or
+  // mutation kicks the loop, which is the first moment it has anything to buy.
   const interactedAt = React.useRef(0);
+  const burstRate = React.useCallback(
+    () =>
+      performance.now() - interactedAt.current < BURST_MS ? BURST_FPS : FPS,
+    [],
+  );
   React.useEffect(() => {
     const card = cardRef.current;
     if (!card) return;
@@ -849,6 +854,32 @@ export default function GlassFloorPage() {
       for (const type of types) card.removeEventListener(type, note, true);
     };
   }, []);
+
+  // Raised by a shadow subscriber whenever a frame of the card lands, so the
+  // render loop knows the one iteration where re-uploading the texture buys
+  // anything. It rides the same shared capture as the feed mirror — same
+  // element, same clock — so it costs no captures of its own.
+  const textureFresh = React.useRef(false);
+  React.useEffect(() => {
+    const subscription = subscribeToSource({
+      resolve: () => cardRef.current,
+      // A getter because the loop reads fps every cycle: this subscriber has
+      // to be due as often as the bursting feed, or frames the feed shows
+      // would reach the water only at the idle rate.
+      get fps() {
+        return burstRate();
+      },
+      delay: 0,
+      // This one never reads the bitmap, only the fact that one arrived, so it
+      // asks for the least it can and lets the mirrors that do read it decide.
+      pixelRatio: BLOOM_RES,
+      isActive: () => true,
+      onFrame: () => {
+        textureFresh.current = true;
+      },
+    });
+    return () => subscription.release();
+  }, [burstRate]);
 
   // The render loop: the feed mirror's canvas goes up as a texture and the
   // shader redraws the water, dissolving each new frame in over the last so
@@ -903,10 +934,12 @@ export default function GlassFloorPage() {
         // The first frame appears outright — there is nothing to fade from.
         fadeMs = landedAt ? Math.min(Math.max(nowMs - landedAt, 50), 180) : 0;
         // A frame arriving on the heels of an interaction is carrying its
-        // result — a focus ring, a typed character — and is shown almost
-        // outright. The window is generous because the frame lags the event
-        // by the whole pipeline: the capture's turn, the capture, the raster.
-        if (nowMs - interactedAt.current < 400) fadeMs = Math.min(fadeMs, 40);
+        // result — a focus ring, a double-click's highlight — and is shown
+        // outright: even a 40ms ease on an answer read as lag, and the burst
+        // rate has frames arriving too often to be worth blending anyway. The
+        // window is generous because the frame lags the event by the whole
+        // pipeline: the capture's turn, the capture, the raster.
+        if (nowMs - interactedAt.current < BURST_MS) fadeMs = 0;
         fadeStart = nowMs;
         landedAt = nowMs;
       }
@@ -1067,7 +1100,7 @@ export default function GlassFloorPage() {
             <ElementMirror
               ref={feedRef}
               source={cardRef}
-              fps={FPS}
+              fps={burstRate}
               pixelRatio={feedRatio}
               className="pointer-events-none absolute"
               style={{
