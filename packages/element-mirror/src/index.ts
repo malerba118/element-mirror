@@ -13,3 +13,4 @@ export {
   type MirrorSubscription,
 } from './mirror-capture'
 export { IGNORE_ATTRIBUTE, type CaptureHandle } from './snapdom-engine'
+export { TextCaret, type TextCaretProps } from './text-caret'

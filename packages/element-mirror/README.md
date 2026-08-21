@@ -212,6 +212,35 @@ visibly softens. The dragged element has to stay laid out (it is the capture
 source), and its own `opacity` is captured with everything else, so draw the
 empty slot as an overlay rather than fading the source.
 
+### The text caret
+
+A focused field's caret never appears in a mirror, because it was never in the
+DOM: the browser draws it over the field at paint time, and its blink runs on
+a clock the platform does not expose — so even an engine that painted a bar
+where the caret sits could not blink it. `TextCaret` turns the caret into DOM
+instead. It hides the native one (`caret-color: transparent`) and renders a
+real element where the caret is, so it lands in captures like everything else,
+blink included — the blink is a Web Animation, which the capture loop treats
+as live content while it runs and stops billing for the moment the caret
+hides.
+
+```tsx
+<div className="relative">
+  <input ref={inputRef} type="text" … />
+  <TextCaret input={inputRef} />
+</div>
+```
+
+Render it inside a positioned ancestor shared with the field. Unstyled it
+matches the native caret — one pixel of the field's own color, blinking on the
+usual cadence, held solid for a beat after every move; `style` and `className`
+land on the caret element, so width, color, glow and radius are yours, while
+position and height are measured and written by the component. It follows the
+same platform rule as selection capture: the field must expose the selection
+API (`text`, `search`, `url`, `tel`, `password` — not `email` or `number`),
+and it hides while the field is unfocused or a range is selected, which is
+what the native caret does.
+
 ## Cost and rate
 
 A capture reads computed styles over the source subtree on the main thread and

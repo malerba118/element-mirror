@@ -4,7 +4,11 @@ import * as React from "react";
 import { CheckIcon, Loader2Icon } from "lucide-react";
 import { Instrument_Sans, JetBrains_Mono } from "next/font/google";
 
-import { ElementMirror, subscribeToSource } from "@frostin/element-mirror";
+import {
+  ElementMirror,
+  TextCaret,
+  subscribeToSource,
+} from "@frostin/element-mirror";
 
 import { useCaptureStats } from "@/components/demo/capture-stats";
 import { Label } from "@/components/ui/label";
@@ -691,6 +695,7 @@ function BloomLayer({
 export default function GlassFloorPage() {
   const stageRef = React.useRef<HTMLDivElement>(null);
   const cardRef = React.useRef<HTMLDivElement>(null);
+  const emailRef = React.useRef<HTMLInputElement>(null);
   /** The unseen mirror whose canvas becomes the water's texture. */
   const feedRef = React.useRef<HTMLSpanElement>(null);
   const waterRef = React.useRef<HTMLCanvasElement>(null);
@@ -1175,8 +1180,10 @@ export default function GlassFloorPage() {
                   border, inset shadow and focus ring belong to the form, so
                   the ring draws around the pair; the input keeps its own left
                   padding, which is what the caret measurement reads. */}
+              {/* relative: the TextCaret positions itself against the
+                  nearest positioned ancestor it shares with the input. */}
               <form
-                className="flex items-center gap-2 rounded-[18px] border border-white/10 bg-white/3 p-1.5 shadow-[inset_0_2px_4px_rgba(0,0,0,0.45)] transition-[border-color,box-shadow] duration-180 focus-within:border-[rgba(199,210,254,0.6)] focus-within:shadow-[inset_0_2px_4px_rgba(0,0,0,0.45),0_0_0_3px_rgba(165,180,252,0.14)]"
+                className="relative flex items-center gap-2 rounded-[18px] border border-white/10 bg-white/3 p-1.5 shadow-[inset_0_2px_4px_rgba(0,0,0,0.45)] transition-[border-color,box-shadow] duration-180 focus-within:border-[rgba(199,210,254,0.6)] focus-within:shadow-[inset_0_2px_4px_rgba(0,0,0,0.45),0_0_0_3px_rgba(165,180,252,0.14)]"
                 onSubmit={submit}
               >
                 {/* type="text" rather than "email": the selection API — and
@@ -1186,6 +1193,7 @@ export default function GlassFloorPage() {
                     is null even mid-selection), so the reflection could never
                     show it. inputMode keeps the email keyboard on touch. */}
                 <input
+                  ref={emailRef}
                   id="email"
                   type="text"
                   inputMode="email"
@@ -1201,6 +1209,18 @@ export default function GlassFloorPage() {
                     if (caret) rippleFromCard(caret.x, caret.y, 6);
                   }}
                   className="min-w-0 flex-1 border-0 bg-transparent py-2.5 pl-3 text-sm text-white outline-none placeholder:text-white/30"
+                />
+                {/* A DOM caret in place of the painted native one, so the
+                    reflection carries it — blink and all. Styled to match
+                    the focus ring's indigo. */}
+                <TextCaret
+                  input={emailRef}
+                  style={{
+                    width: 2,
+                    borderRadius: 1,
+                    background: "#c7d2fe",
+                    boxShadow: "0 0 7px rgba(165,180,252,0.85)",
+                  }}
                 />
                 <button
                   type="submit"
