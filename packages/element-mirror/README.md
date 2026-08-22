@@ -15,7 +15,7 @@ const cardRef = useRef<HTMLDivElement>(null)
 
 <div ref={cardRef}>…</div>
 
-<ElementMirror source={cardRef} fps={12} />
+<ElementMirror source={cardRef} />
 ```
 
 Captures come from [`@frostin/snapdom`](https://www.npmjs.com/package/@frostin/snapdom),
@@ -31,7 +31,7 @@ at 2x) a capture costs ~5ms of main thread, and a mirror asked for 60fps gets
 | Prop             | Type                                              | Default            | Notes                                                                                                |
 | ---------------- | ------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------- |
 | `source`         | `Element \| RefObject<Element \| null> \| string` | —                  | The element to mirror, as an element, a ref, or a CSS selector.                                      |
-| `fps`            | `number \| () => number`                          | `12`               | Maximum captures per second, up to the display refresh rate. A function is read every capture cycle. |
+| `fps`            | `number \| () => number`                          | `30`               | Maximum captures per second, up to the display refresh rate. A function is read every capture cycle. |
 | `delay`          | `number`                                          | `0`                | Milliseconds behind the source to run.                                                               |
 | `pixelRatio`     | `number`                                          | `devicePixelRatio` | Bitmap pixels captured per CSS pixel.                                                                |
 | `objectPosition` | `string`                                          | `'center'`         | Where the source's box sits when CSS gives the mirror a box of a different ratio.                    |

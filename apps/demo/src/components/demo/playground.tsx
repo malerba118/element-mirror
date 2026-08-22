@@ -39,7 +39,7 @@ const POSITION_VALUES = ['center', 'top', 'bottom', 'left', 'right']
 
 export function Playground() {
   const sourceRef = React.useRef<HTMLDivElement>(null)
-  const [fps, setFps] = React.useState(12)
+  const [fps, setFps] = React.useState(30)
   const [delay, setDelay] = React.useState(0)
   const [pixelRatio, setPixelRatio] = React.useState(2)
   const [layout, setLayout] = React.useState<Layout>('boxed')

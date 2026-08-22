@@ -59,7 +59,7 @@ export type ElementMirrorProps = Omit<
    * interaction's own events need it. A function raising its answer costs
    * nothing until the next change gives the loop a reason to capture.
    *
-   * @default 12
+   * @default 30
    */
   fps?: number | (() => number)
 
@@ -305,7 +305,7 @@ export const ElementMirror = React.forwardRef<
 >(function ElementMirror(
   {
     source,
-    fps = 12,
+    fps = 30,
     delay = 0,
     pixelRatio,
     objectPosition = 'center',

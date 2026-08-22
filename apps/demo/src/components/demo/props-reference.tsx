@@ -12,10 +12,10 @@ const CAPTURE = [
   },
   {
     name: 'fps',
-    type: 'number',
-    default: '12',
+    type: 'number | (() => number)',
+    default: '30',
     description:
-      'Maximum captures per second, up to the display refresh rate. Within a shared source, the highest fps sets the capture rate.',
+      'Maximum captures per second, up to the display refresh rate. Within a shared source, the highest fps sets the capture rate. A function is read every cycle, so a rate can rise for the length of an interaction without re-subscribing.',
   },
   {
     name: 'delay',

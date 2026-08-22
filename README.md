@@ -41,7 +41,7 @@ The component uses browser APIs, so in Next.js it belongs in a client component.
 | Prop | Type | Default | Purpose |
 | --- | --- | --- | --- |
 | `source` | `Element \| RefObject<Element \| null> \| string` | required | Element, React ref, or CSS selector to mirror. |
-| `fps` | `number \| () => number` | `12` | Maximum capture rate. A function is read every capture cycle. |
+| `fps` | `number \| () => number` | `30` | Maximum capture rate. A function is read every capture cycle. |
 | `delay` | `number` | `0` | How many milliseconds behind the source to display. |
 | `pixelRatio` | `number` | `devicePixelRatio` | Captured bitmap pixels per CSS pixel. |
 | `objectPosition` | `string` | `'center'` | Alignment when the mirror and source have different aspect ratios. |

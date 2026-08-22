@@ -143,7 +143,7 @@ export function SharingShowcase() {
               label="main thread"
               value={stats.mainThreadPercent}
               unit="%"
-              hint="captures/s × ms, budget-capped at 20%."
+              hint="captures/s × ms. Each source is paced to stay under 45% of it."
             />
           </div>
           <p className="text-xs text-muted-foreground">
