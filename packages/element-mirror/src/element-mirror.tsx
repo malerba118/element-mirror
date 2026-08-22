@@ -126,15 +126,6 @@ export type ElementMirrorProps = Omit<
 const useIsomorphicLayoutEffect =
   typeof window === 'undefined' ? React.useEffect : React.useLayoutEffect
 
-// The wrapper is an ordinary box with an absolutely positioned child, so it has
-// no natural size of its own. Size containment plus a declared intrinsic size
-// gives it the source's dimensions the way an image has its file's, and leaves
-// any width or height the page supplies free to win.
-const canDeclareIntrinsicSize =
-  typeof CSS !== 'undefined' &&
-  typeof CSS.supports === 'function' &&
-  CSS.supports('contain-intrinsic-size', '1px 1px')
-
 /**
  * Growth increment for the painted area, in source pixels, once the paint
  * reaches further than this out. Up to it, room is taken to the pixel.
@@ -234,44 +225,22 @@ function readLayoutBox(element: Element) {
 }
 
 /**
- * How the mirror's box is described to CSS.
- *
- * Layout containment first, and for the canvas rather than for layout: it makes
- * this box the containing block for anything absolutely positioned inside it
- * whatever its own `position` turns out to be, which is what lets the page
- * position the mirror itself. An inline `position: relative` would have done the
- * same job while quietly outranking the `absolute` a class asked for.
- *
- * Then size containment, so the canvas inside contributes nothing to the box;
- * an aspect ratio; and the source's size as the declared intrinsic size. The
- * three together give every sizing case the same answer an image gives: left
- * alone the box is the source's own size, a width implies the height, a height
- * implies the width, and both are obeyed as given. The intrinsic size only
- * speaks when CSS said nothing — a definite dimension resolves the free axis
- * through the ratio, never from the intrinsic size — so declaring it always
- * costs nothing and is what gives an unsized mirror a box at all.
+ * How the anchor — the invisible element that gives the mirror its size — is
+ * painted out of the picture. Everything inline, because a page's own rules
+ * for `svg` (a reset's `max-width`, a utility's `display`) must not reach the
+ * one element whose sizing is the component's contract.
  */
-function sizing(intrinsic: {
-  width: number
-  height: number
-}): React.CSSProperties {
-  if (!canDeclareIntrinsicSize) {
-    // Explicit inline dimensions, which outrank every stylesheet: in a browser
-    // this old, "CSS always wins" narrows to the `style` prop. The alternative
-    // is a box that collapses to nothing, which is worse. Strings rather than
-    // numbers so the same object can be written straight to a style
-    // declaration, which has no notion of a unitless length.
-    return {
-      contain: 'layout',
-      width: `${intrinsic.width}px`,
-      height: `${intrinsic.height}px`,
-    }
-  }
-  return {
-    contain: 'size layout',
-    aspectRatio: `${intrinsic.width} / ${intrinsic.height}`,
-    containIntrinsicSize: `${intrinsic.width}px ${intrinsic.height}px`,
-  }
+const ANCHOR_STYLE: React.CSSProperties = {
+  display: 'block',
+  width: 'auto',
+  height: 'auto',
+  // How the wrapper's box, when CSS gives it one, reaches back into the
+  // anchor: a replaced element capped in one axis derives the other through
+  // its ratio, which is the transfer the mirror's sizing leans on.
+  maxWidth: '100%',
+  maxHeight: '100%',
+  // Invisible but still laid out, which is the whole job.
+  visibility: 'hidden',
 }
 
 /**
@@ -350,13 +319,14 @@ export const ElementMirror = React.forwardRef<
   const wrapperRef = React.useRef<HTMLSpanElement>(null)
   React.useImperativeHandle(forwardedRef, () => wrapperRef.current!)
   const canvasRef = React.useRef<HTMLCanvasElement>(null)
+  const anchorRef = React.useRef<SVGSVGElement>(null)
 
-  // The source's layout box, for the wrapper's intrinsic size and ratio.
-  // State so React renders the same declarations it would find on the element,
+  // The source's layout box, for the anchor's intrinsic size and ratio.
+  // State so React renders the same attributes it would find on the element,
   // but not the path a frame travels: a frame is drawn at its own layout size,
   // and a wrapper still sized for the previous frame would squeeze it, so the
-  // blit writes the style and measures synchronously and this commit arrives
-  // afterwards as a no-op.
+  // blit writes the attributes and measures synchronously and this commit
+  // arrives afterwards as a no-op.
   const [intrinsic, setIntrinsic] = React.useState<{
     width: number
     height: number
@@ -405,8 +375,8 @@ export const ElementMirror = React.forwardRef<
   backgroundRef.current = background
   const positionRef = React.useRef(objectPosition)
   positionRef.current = objectPosition
-  // The caller's style, read at blit time: a sizing declaration written there
-  // outranks the ones the mirror writes for itself.
+  // The caller's style, read at blit time: an aspect-ratio written there
+  // outranks the one the mirror writes for itself.
   const styleRef = React.useRef(style)
   styleRef.current = style
 
@@ -610,25 +580,24 @@ export const ElementMirror = React.forwardRef<
           height: geometry.layoutHeight,
         }
 
-        // A frame at a new size resizes the wrapper here, synchronously,
+        // A frame at a new size resizes the anchor here, synchronously,
         // rather than through the intrinsic-size state. That state reaches the
         // element a React commit and a resize callback later — one or two
         // displayed frames — and until it does, the box is the old size and
         // the fit below would squeeze the new frame into it: a source being
-        // dragged taller flashes its mirror narrower. Writing the style now
-        // and measuring straight back keeps every paint self-consistent, and
-        // the state update at the bottom re-renders these same values, so
+        // dragged taller flashes its mirror narrower. Writing the attributes
+        // now and measuring straight back keeps every paint self-consistent,
+        // and the state update at the bottom re-renders these same values, so
         // React's own write changes nothing.
         const held = heldRef.current
         if (layout.width !== held.width || layout.height !== held.height) {
-          const declared = sizing(layout) as Record<string, string>
-          const overrides = styleRef.current as
-            | Record<string, unknown>
-            | undefined
-          const target = wrapper.style as unknown as Record<string, string>
-          for (const key of Object.keys(declared)) {
-            if (overrides?.[key] !== undefined) continue
-            target[key] = declared[key]
+          const anchor = anchorRef.current
+          if (anchor) {
+            anchor.setAttribute('width', String(layout.width))
+            anchor.setAttribute('height', String(layout.height))
+          }
+          if (styleRef.current?.aspectRatio === undefined) {
+            wrapper.style.aspectRatio = `${layout.width} / ${layout.height}`
           }
           boxRef.current = readContentBox(wrapper)
         }
@@ -733,13 +702,29 @@ export const ElementMirror = React.forwardRef<
         // CSS reset does the same to replaced elements, but a span is not one,
         // so a mirror in a page with a reset would miss out.
         verticalAlign: 'bottom',
+        // For the canvas rather than for layout: containment makes this box
+        // the containing block for anything absolutely positioned inside it
+        // whatever its own `position` turns out to be, which is what lets the
+        // page position the mirror itself. An inline `position: relative`
+        // would have done the same job while quietly outranking the `absolute`
+        // a class asked for.
+        contain: 'layout',
+        // Half of replaced-element sizing: the anchor below can only shrink
+        // to a box CSS caps, so a box CSS *grows* — a block mirror filling
+        // its column, an explicit width past the source's own — needs the
+        // ratio declared where the free axis can follow it. Plain
+        // aspect-ratio with no declared intrinsic size beside it resolves
+        // identically in every engine; it was the declared intrinsic height
+        // that Chromium and WebKit let win over the ratio transfer.
+        ...(intrinsic
+          ? { aspectRatio: `${intrinsic.width} / ${intrinsic.height}` }
+          : null),
         // Before the first capture lands there is nothing to show, and a
         // capture cannot be taken synchronously. Painting anyway would put an
         // empty box on screen for a frame, which reads as a flicker wherever a
         // mirror appears in response to an interaction. Hidden rather than
         // unmounted, so it still holds its layout box.
         ...(hasFrame ? null : { visibility: 'hidden' as const }),
-        ...(intrinsic ? sizing(intrinsic) : null),
         ...style,
       }}
       // Says which of the two elements is the mirror's box, for anything
@@ -748,6 +733,29 @@ export const ElementMirror = React.forwardRef<
       data-element-mirror=""
       {...spanProps}
     >
+      {/*
+        The anchor: an invisible replaced element in flow, sized to the source,
+        that gives the wrapper its layout the way a file gives an <img> its.
+        Left alone the wrapper wraps it at the source's own size; a width or
+        height from CSS caps it through max-width/max-height and the free axis
+        follows its ratio; both dimensions cap both axes and are obeyed.
+        Replaced-element sizing rather than `contain: size` plus declared
+        intrinsics, because the engines disagree on whether a declared
+        intrinsic size or the aspect ratio wins a free axis (Chromium and
+        WebKit letterboxed a width-constrained mirror that Firefox sized
+        tight) while all of them agree about a replaced element —
+        `.perf/sizing-fix.mjs` holds the matrix. An <svg> specifically: its
+        attributes are its intrinsic size, taking fractions and costing no
+        resource load, where an <img> needs a fetch and a <canvas> rounds to
+        whole pixels and reads as live content to the capture loop.
+      */}
+      <svg
+        ref={anchorRef}
+        width={intrinsic?.width ?? 0}
+        height={intrinsic?.height ?? 0}
+        aria-hidden
+        style={ANCHOR_STYLE}
+      />
       <canvas
         ref={canvasRef}
         // Out of flow, so the room the paint needs never reaches layout.

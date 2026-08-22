@@ -270,6 +270,25 @@ interface SourceState {
 const subscribers = new Map<MirrorSubscriber, SubscriberState>()
 const sources = new Map<Element, SourceState>()
 
+/**
+ * Bounds the dev-only instrumentation. Marks and measures sit in the
+ * performance timeline until someone clears them, and nobody ever does: a
+ * mirror capturing overnight writes millions of entries into a buffer the
+ * browser never trims. Cleared in batches large enough that the .perf
+ * scripts, which read a window of recent entries, still find theirs.
+ */
+const PERF_ENTRY_LIMIT = 5000
+let perfEntries = 0
+
+function notePerfEntry() {
+  perfEntries += 1
+  if (perfEntries < PERF_ENTRY_LIMIT) return
+  perfEntries = 0
+  performance.clearMarks('em:dirty')
+  performance.clearMeasures('em:main')
+  performance.clearMeasures('em:settled')
+}
+
 function stateFor(element: Element, now: number) {
   let state = sources.get(element)
   if (!state) {
@@ -320,7 +339,10 @@ function stateFor(element: Element, now: number) {
     const markDirty = () => {
       // Dev-only breadcrumb; .perf/latency-grid.mjs measures the distance
       // from this mark to the capture it provokes.
-      if (process.env.NODE_ENV !== 'production') performance.mark('em:dirty')
+      if (process.env.NODE_ENV !== 'production') {
+        performance.mark('em:dirty')
+        notePerfEntry()
+      }
       created.dirty = true
       kick()
     }
@@ -832,6 +854,7 @@ async function capture(
   state.lastCaptureAt = performance.now()
   if (process.env.NODE_ENV !== 'production') {
     performance.measure('em:main', { start: started, end: state.lastCaptureAt })
+    notePerfEntry()
   }
   // What throttling is protecting is the main thread, so the engine reports
   // its own work apart from time spent awaiting the browser's rasterizer, and
@@ -863,6 +886,7 @@ async function capture(
     () => {
       if (process.env.NODE_ENV !== 'production') {
         performance.measure('em:settled', { start: started })
+        notePerfEntry()
       }
       frame.ready = true
       // The mirrors this capture was for get it the moment it lands rather

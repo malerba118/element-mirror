@@ -1,4 +1,5 @@
 import { getStyleKey, softensWidth, shouldIgnoreProp, getStyle } from '../utils/index.js'
+import { isFirefox } from '../utils/browser.js'
 import { cache } from '../core/cache.js'
 
 const snapshotCache = new WeakMap()
@@ -382,7 +383,76 @@ function snapshotComputedStyleFull(style, options = {}) {
     if (!hasBorderImage) out['border'] = 'none'
   }
 
+  applyBgClipTextFallback(out)
+
   return out
+}
+
+/**
+ * Firefox cannot rasterize background-clip:text inside an SVG foreignObject
+ * image (https://bugzilla.mozilla.org/show_bug.cgi?id=1481498 territory): the
+ * background is dropped entirely, so gradient text whose color is transparent
+ * comes out as nothing at all. Approximate it with a plain text color — the
+ * average of the gradient's stops — which loses the gradient but keeps the
+ * words. Only fires when the text would otherwise be invisible.
+ * @param {Record<string,string>} out mutable style snapshot
+ */
+function applyBgClipTextFallback(out) {
+  if (!isFirefox()) return
+  const clip = out['background-clip'] || out['-webkit-background-clip']
+  if (!clip || !clip.includes('text')) return
+  const transparent = (v) => v === 'transparent' || v === 'rgba(0, 0, 0, 0)'
+  // -webkit-text-fill-color paints the glyphs when set; color is the fallback.
+  const fill = out['-webkit-text-fill-color']
+  if (!transparent(fill !== undefined ? fill : out['color'])) return
+  const solid =
+    bgClipTextFallbackColor(out['background-image'], out['background-color'])
+  if (!solid) return
+  if (transparent(out['color'])) out['color'] = solid
+  if (fill !== undefined) out['-webkit-text-fill-color'] = solid
+  out['background-image'] = 'none'
+  out['background-color'] = 'transparent'
+  delete out['background-clip']
+  delete out['-webkit-background-clip']
+  // Other passes re-inline the live values onto the clone over the class this
+  // snapshot becomes — resolveCSSVars materializes the transparent color,
+  // normalizeInlineStyleToComputed re-inlines an authored gradient — so the
+  // fallback must also be written inline with !important; inlineAllStyles
+  // reads this marker. Non-enumerable: signature/key iteration must not see it.
+  Object.defineProperty(out, '__bgClipTextFix', { value: solid, enumerable: false })
+}
+
+/**
+ * A single color standing in for a clipped-to-text background: the channel
+ * average of every visible rgb()/rgba() in the background-image (computed
+ * gradients serialize their stops that way), else the background-color.
+ * @param {string} [backgroundImage]
+ * @param {string} [backgroundColor]
+ * @returns {string|null}
+ */
+export function bgClipTextFallbackColor(backgroundImage, backgroundColor) {
+  const collect = (value) => {
+    const colors = []
+    const re = /rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+%?))?\s*\)/g
+    let m
+    while ((m = re.exec(value || ''))) {
+      const raw = m[4]
+      const alpha =
+        raw === undefined ? 1 : parseFloat(raw) / (raw.endsWith('%') ? 100 : 1)
+      if (alpha > 0.05) colors.push([+m[1], +m[2], +m[3]])
+    }
+    return colors
+  }
+  let colors = collect(backgroundImage)
+  if (!colors.length) colors = collect(backgroundColor)
+  if (!colors.length) return null
+  const sum = [0, 0, 0]
+  for (const [r, g, b] of colors) {
+    sum[0] += r
+    sum[1] += g
+    sum[2] += b
+  }
+  return `rgb(${sum.map((c) => Math.round(c / colors.length)).join(', ')})`
 }
 /**
  * Cheap "is this box sized by its own content?" check: any child element or non-whitespace
@@ -548,6 +618,17 @@ export async function inlineAllStyles(source, clone, sessionOrCtx, opts) {
   }
 
   const snap = getSnapshot(source, pre, ctx.options)
+
+  // Firefox background-clip:text fallback (see applyBgClipTextFallback): the
+  // class carries the substitute color, but resolveCSSVars and the authored
+  // inline-style normalization above re-inline the live transparent color and
+  // gradient over any class. Inline !important outranks them all.
+  if (snap.__bgClipTextFix && clone && clone.style) {
+    clone.style.setProperty('background-image', 'none', 'important')
+    clone.style.setProperty('background-color', 'transparent', 'important')
+    clone.style.setProperty('color', snap.__bgClipTextFix, 'important')
+    clone.style.setProperty('-webkit-text-fill-color', snap.__bgClipTextFix, 'important')
+  }
 
   const flexItem = isFlexOrGridItem(source)
 

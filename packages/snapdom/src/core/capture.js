@@ -120,6 +120,18 @@ function checkBurstAdvice(element) {
  */
 export async function captureDOM(element, options) {
   if (!element) throw new Error('Element cannot be null or undefined')
+  // Opt-in phase timing for the perf scripts (`.perf/capture-phases.mjs`):
+  // set `globalThis.__SNAPDOM_PHASES__ = []` and every capture pushes
+  // `{ phase, ms }` rows. Costs one falsy check per phase when unset.
+  const phaseLog = globalThis.__SNAPDOM_PHASES__
+  let phaseAt = phaseLog ? performance.now() : 0
+  const phase = phaseLog
+    ? (name) => {
+      const now = performance.now()
+      phaseLog.push({ phase: name, ms: now - phaseAt })
+      phaseAt = now
+    }
+    : null
   applyCachePolicy(options.cache)
   // Fold pending mutations into the per-node style stamps and invalidate the targets of
   // running animations/transitions, so this capture reuses every snapshot it may and none
@@ -163,6 +175,7 @@ export async function captureDOM(element, options) {
 
   // BEFORECLONE
   await runHook('beforeClone', state)
+  if (phase) phase('before-clone')
   const undoClamp = lineClampTree(state.element, preClipRect)
   try {
     // Keep this capture's own clone→source map: nested iframe captures reassign
@@ -191,6 +204,8 @@ export async function captureDOM(element, options) {
   } finally {
     undoClamp()
   }
+
+  if (phase) phase('clone')
 
   // AFTERCLONE
   state = { clone, classCSS, styleCache, nodeMap, ...state }
@@ -279,6 +294,7 @@ export async function captureDOM(element, options) {
   }
 
   await Promise.all([assetsPhase, fontsPhase])
+  if (phase) phase('assets+fonts')
 
   // PERF-6: the set of tags under an element only changes when nodes are added
   // or removed, and any such mutation bumps the root's own style stamp (its
@@ -319,6 +335,7 @@ export async function captureDOM(element, options) {
   const scrollbarCSS = collectScrollbarCSS(state.element?.ownerDocument || document)
   state = { fontsCSS, baseCSS, scrollbarCSS, ...state }
   await runHook('beforeRender', state)
+  if (phase) phase('base-css')
 
   await new Promise((resolve) => {
     idle(() => {
@@ -667,6 +684,7 @@ export async function captureDOM(element, options) {
   })
   // afterRender(context)
   await runHook('afterRender', state)
+  if (phase) phase('serialize')
 
   const sandbox = document.getElementById('snapdom-sandbox')
   if (sandbox && sandbox.style.position === 'absolute') sandbox.remove()

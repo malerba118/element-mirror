@@ -21,11 +21,16 @@ afterEach(() => {
 // foreignObject are composited, producing blank raster exports. The fix appends
 // the image offscreen and waits two animation frames before drawImage.
 describe('toCanvas — #394 Safari compositing wait', () => {
+  // Matched by tagName, not `instanceof HTMLImageElement`: the image is created
+  // inside toCanvas's decode iframe, so it belongs to that frame's realm and the
+  // main window's constructor doesn't match it.
+  const isImg = (n) => n && n.tagName === 'IMG'
+
   it('does NOT append the <img> on non-Safari (no speed cost)', async () => {
     vi.mocked(browser.isSafari).mockReturnValue(false)
     const appendSpy = vi.spyOn(HTMLBodyElement.prototype, 'appendChild')
     await toCanvas(ONE_BY_ONE_PNG, { scale: 1, dpr: 1 })
-    const appendedImgs = appendSpy.mock.calls.filter(c => c[0] instanceof HTMLImageElement)
+    const appendedImgs = appendSpy.mock.calls.filter(c => isImg(c[0]))
     expect(appendedImgs.length).toBe(0)
   })
 
@@ -36,7 +41,7 @@ describe('toCanvas — #394 Safari compositing wait', () => {
     const canvas = await toCanvas(ONE_BY_ONE_PNG, { scale: 1, dpr: 1 })
     const imgCountAfter = document.querySelectorAll('img').length
 
-    const appendedImgs = appendSpy.mock.calls.filter(c => c[0] instanceof HTMLImageElement)
+    const appendedImgs = appendSpy.mock.calls.filter(c => isImg(c[0]))
     expect(appendedImgs.length).toBe(1)
     // The appended img has offscreen positioning so it doesn't flash
     const appended = appendedImgs[0][0]

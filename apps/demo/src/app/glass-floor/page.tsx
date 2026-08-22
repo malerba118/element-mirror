@@ -611,10 +611,21 @@ function BloomLayer({
     const canvas = canvasRef.current;
     const ctx = canvas?.getContext("2d");
     if (!canvas || !ctx) return;
-    // Feature-probe rather than assume: Safari still ignores ctx.filter.
-    ctx.filter = "blur(1px)";
-    const filterable = ctx.filter !== "none";
-    ctx.filter = "none";
+    // Feature-probe by drawing rather than by reading the attribute back:
+    // Safari reflects whatever string was assigned to ctx.filter while
+    // ignoring it when painting, so `ctx.filter !== "none"` passes there and
+    // the bloom used to come out as an unblurred ghost of the card. A real
+    // blur spreads ink outside the rect; a silent no-op leaves this pixel
+    // untouched.
+    const probe = document.createElement("canvas");
+    probe.width = probe.height = 20;
+    const probeCtx = probe.getContext("2d");
+    let filterable = false;
+    if (probeCtx) {
+      probeCtx.filter = "blur(4px)";
+      probeCtx.fillRect(8, 8, 4, 4);
+      filterable = probeCtx.getImageData(3, 10, 1, 1).data[3] > 0;
+    }
 
     const subscription = subscribeToSource({
       resolve: () => source.current,

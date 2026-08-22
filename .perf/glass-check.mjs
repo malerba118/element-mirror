@@ -111,7 +111,7 @@ const stillDrift = await waterDrift()
 // rings die out, and compare the frozen water against before — what remains
 // changed is the reflected text itself.
 await readWater()
-await page.click('#email')
+await page.click('input[aria-label="Email address"]')
 await page.keyboard.type('ada@lovelace.org', { delay: 80 })
 await page.screenshot({ path: '/tmp/glass-typing.png' })
 await page.waitForTimeout(3600)
@@ -129,7 +129,7 @@ const clickDrift = await waterDrift()
 
 // One keystroke must break it immediately — the ring lands before the
 // character can even be captured — and afterwards the water refreezes.
-await page.click('#email')
+await page.click('input[aria-label="Email address"]')
 await page.waitForTimeout(1200)
 await readWater()
 await page.keyboard.press('x')

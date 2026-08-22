@@ -124,9 +124,10 @@ covers, and let the container crop it:
 </div>
 ```
 
-Under the hood the wrapper declares only an intrinsic size (`contain: size` +
-`contain-intrinsic-size`), so any width or height from CSS still wins, exactly
-as it does on an image.
+Under the hood the wrapper holds an invisible replaced element in flow, sized
+to the source, so the box resolves by replaced-element sizing — the algorithm
+every engine already agrees on for an image — and any width or height from CSS
+still wins, exactly as it does on one.
 
 ### The mirror's box
 

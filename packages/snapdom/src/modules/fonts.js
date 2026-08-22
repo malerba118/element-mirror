@@ -1050,10 +1050,24 @@ export function collectUsedCodepoints(root, keep) {
 }
 
 /**
+ * Families each document has already warmed, so repeated captures skip the
+ * warm-up entirely. The warm-up exists to defeat WebKit's lazy first
+ * rasterization of a face, and a face only needs that once — but every pass
+ * through the warm-up awaits two animation frames, which on a mirror
+ * re-capturing the same element was ~30ms of waiting billed to every capture
+ * (the difference between a 12fps mirror and a 4fps one in Safari). Keyed by
+ * the FontFaceSet's size as well, so a late-arriving face re-warms: a family
+ * warmed while its webfont was still loading rasterized the fallback.
+ * @type {WeakMap<Document, { size: number, families: Set<string> }>}
+ */
+const warmedFamilies = new WeakMap()
+
+/**
  * Ensures web fonts are fully resolved before capture, with a Safari-friendly warm-up.
  * - Awaits document.fonts.ready
  * - Forces layout/rasterization for each family by painting hidden spans
  * - Optionally retries a couple of times if Safari is still lazy
+ * - Runs once per family per document; repeat calls return synchronously
  *
  * @param {Set<string>|string[]} families - Plain family names (e.g., "Mansalva", "Unbounded")
  * @param {number} [warmupRepetitions=2] - How many times to warm-up each family
@@ -1061,10 +1075,20 @@ export function collectUsedCodepoints(root, keep) {
  * @returns {Promise<void>}
  */
 export async function ensureFontsReady(families, warmupRepetitions = 2, doc = document) {
-  try { await doc.fonts.ready } catch {}
-
-  const fams = Array.from(families || []).filter(Boolean)
+  let fams = Array.from(families || []).filter(Boolean)
   if (fams.length === 0) return
+
+  let warmed = warmedFamilies.get(doc)
+  let fontCount = 0
+  try { fontCount = doc.fonts.size } catch { }
+  if (!warmed || warmed.size !== fontCount) {
+    warmed = { size: fontCount, families: new Set() }
+    warmedFamilies.set(doc, warmed)
+  }
+  fams = fams.filter((fam) => !warmed.families.has(fam))
+  if (fams.length === 0) return
+
+  try { await doc.fonts.ready } catch {}
 
   const warmupOnce = () => {
     const container = doc.createElement('div')
@@ -1095,4 +1119,5 @@ export async function ensureFontsReady(families, warmupRepetitions = 2, doc = do
     warmupOnce()
     await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)))
   }
+  for (const fam of fams) warmed.families.add(fam)
 }
