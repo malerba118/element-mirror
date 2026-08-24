@@ -4,6 +4,7 @@ import * as React from 'react'
 import { CameraIcon } from 'lucide-react'
 
 import { ElementMirror } from '@frostin/element-mirror'
+
 import { MirrorSource } from '@/components/demo/mirror-source'
 import { CodeBlock } from '@/components/demo/section'
 import { Badge } from '@/components/ui/badge'
@@ -68,9 +69,7 @@ export function SnapshotShowcase() {
             <CameraIcon />
             Re-capture
           </Button>
-          <CodeBlock
-            code={`<ElementMirror source="#${SOURCE_ID}" paused />`}
-          />
+          <CodeBlock code={`<ElementMirror source="#${SOURCE_ID}" paused />`} />
         </CardContent>
       </Card>
     </div>

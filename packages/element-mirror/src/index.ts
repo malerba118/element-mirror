@@ -8,7 +8,9 @@ export {
   subscribeToCaptureStats,
   subscribeToSource,
   type CaptureStats,
+  type FrameGeometry,
   type MirrorSubscriber,
   type MirrorSubscription,
 } from './mirror-capture'
 export { IGNORE_ATTRIBUTE, type CaptureHandle } from './snapdom-engine'
+export { TextCaret, type TextCaretProps } from './text-caret'

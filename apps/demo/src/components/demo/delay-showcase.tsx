@@ -3,6 +3,7 @@
 import * as React from 'react'
 
 import { ElementMirror } from '@frostin/element-mirror'
+
 import { Stat, useCaptureStats } from '@/components/demo/capture-stats'
 import { MirrorSource } from '@/components/demo/mirror-source'
 import { CodeBlock, Token } from '@/components/demo/section'

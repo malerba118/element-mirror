@@ -35,11 +35,14 @@ await page.evaluate(() => {
     for (let index = 3; index < data.length; index += 4) {
       if (data[index] > 8) opaque += 1
     }
-    const rect = canvas.getBoundingClientRect()
+    // The box is not always the canvas: a mirror that paints outside its box
+    // says which element the box is, and the canvas is free to be another size.
+    const box = canvas.closest('[data-element-mirror]') ?? canvas
+    const rect = box.getBoundingClientRect()
     return {
       url: canvas.toDataURL(),
       opaqueRatio: opaque / (data.length / 4),
-      visibility: getComputedStyle(canvas).visibility,
+      visibility: getComputedStyle(box).visibility,
       css: [rect.width, rect.height],
     }
   }

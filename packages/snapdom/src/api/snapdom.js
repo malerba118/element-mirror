@@ -213,6 +213,11 @@ snapdom.capture = async (el, context, _token) => {
   // —— Helpers esperados por los tests + API azúcar ——
   const result = {
     url,
+    // What the capture decided about geometry: the element's box (w0/h0), the
+    // raster's viewBox (vbW/vbH) and where the element's own origin landed in it
+    // (originX/originY). A caller drawing this back over the live element cannot
+    // work the last one out for itself.
+    meta: context.meta,
     toRaw: () => url,
     to: (type, opts) => runExport(type, opts),
 

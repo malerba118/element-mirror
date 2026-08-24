@@ -55,14 +55,19 @@ await page.evaluate(() => {
 await wait(1500)
 
 await page.evaluate(() => {
+  // Named by the figure it sits in rather than by how it is styled: the figure
+  // that gives its mirror no CSS size, so the capture is shown whole and at its
+  // own scale, and a repaint of any part of the source turns up in it.
   window.__mirror = () => {
-    const section = Array.from(document.querySelectorAll('section')).find((s) =>
-      s.querySelector('h2')?.textContent?.includes('sizes like an image')
+    const figure = Array.from(document.querySelectorAll('[data-slot="card"]')).find(
+      (card) =>
+        card
+          .querySelector('[data-slot="card-title"]')
+          ?.textContent?.includes('No size at all')
     )
-    const canvas = Array.from(
-      section.querySelectorAll('canvas[data-element-mirror-ignore]')
-    ).find((node) => !node.style.width && !node.style.height)
-    return canvas ? canvas.toDataURL() : null
+    const canvas = figure?.querySelector('canvas[data-element-mirror-ignore]')
+    if (!canvas) throw new Error('the unsized mirror is not on the page')
+    return canvas.toDataURL()
   }
 })
 

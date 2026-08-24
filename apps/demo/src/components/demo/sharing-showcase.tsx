@@ -2,8 +2,9 @@
 
 import * as React from 'react'
 
-import { ElementMirror } from '@frostin/element-mirror'
 import { Stat, useCaptureStats } from '@/components/demo/capture-stats'
+import { ElementMirror } from '@frostin/element-mirror'
+
 import { MirrorSource } from '@/components/demo/mirror-source'
 import { Token } from '@/components/demo/section'
 import {
@@ -142,7 +143,7 @@ export function SharingShowcase() {
               label="main thread"
               value={stats.mainThreadPercent}
               unit="%"
-              hint="captures/s × ms, budget-capped at 20%."
+              hint="captures/s × ms. Each source is paced to stay under 45% of it."
             />
           </div>
           <p className="text-xs text-muted-foreground">

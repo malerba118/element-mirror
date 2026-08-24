@@ -1,4 +1,5 @@
 import { getStyleKey, softensWidth, shouldIgnoreProp, getStyle } from '../utils/index.js'
+import { isFirefox } from '../utils/browser.js'
 import { cache } from '../core/cache.js'
 
 const snapshotCache = new WeakMap()
@@ -10,6 +11,10 @@ const MAX_SNAPSHOT_KEY_CACHE = 2000
 let __epoch = 0
 function bumpEpoch() {
   __epoch++
+  if (globalThis.__snapStats) {
+    globalThis.__snapStats.bumps = (globalThis.__snapStats.bumps || 0) + 1
+    if (globalThis.__snapStats.traceBumps) console.trace('[snapdom] epoch bump')
+  }
   // Evict when oversized — entries are cheap to rebuild on the next capture.
   if (snapshotKeyCache.size > MAX_SNAPSHOT_KEY_CACHE) snapshotKeyCache.clear()
 }
@@ -38,6 +43,18 @@ export function notifyStyleEpoch() { bumpEpoch() }
 const nodeStamp = new WeakMap()
 let nodeClock = 0
 const MAX_SNAPSHOT_AGE_MS = 1000
+
+/**
+ * PERF-6: stagger cache expiry. Every snapshot expiring exactly MAX_SNAPSHOT_AGE_MS after
+ * the capture that wrote it meant they all expired in the same later capture — one capture
+ * a second re-read the whole subtree (~3x the cost of its neighbors), which is exactly the
+ * kind of spike that makes a mirror's frame pacing collapse at its budget's edge. Backdating
+ * each record by a random quarter of the bound spreads the refreshes across captures while
+ * only ever *shortening* a record's life, so the staleness guarantee is untouched.
+ */
+export function jitteredWriteTime(now = performance.now()) {
+  return now - Math.random() * (MAX_SNAPSHOT_AGE_MS * 0.25)
+}
 
 /** The stamp a node's cached style-derived state was computed at (see snapshotIsCurrent). */
 export function nodeStyleStamp(el) {
@@ -90,6 +107,28 @@ function invalidateFromRecords(records) {
     // custom properties set there; that is what the epoch is for.
     if (el === document.documentElement || el === document.body) {
       bumpEpoch()
+      continue
+    }
+    // PERF-6: style-attribute writes and text edits get a tighter neighborhood than the
+    // general case. No selector matches on another element's style attribute or text
+    // content, so unlike a class flip they cannot restyle a sibling's *subtree*; what they
+    // can still do is resize things — the element's own box moves its flex/grid siblings'
+    // resolved values and the auto-height chain above it — and reach ancestors via
+    // `:has()`. So: the element's subtree (inherited and custom properties flow down),
+    // each sibling's own snapshot (their subtrees only via `[style*=…]`-grade exotica,
+    // which PERF-5 already leaves to the age bound), and each ancestor's own snapshot.
+    // This matters because writing `el.style` from script is how JS-driven animation
+    // looks to an observer — a progress bar updating ten times a second was invalidating
+    // its parent's whole subtree on every tick.
+    if (rec.type === 'characterData' || (rec.type === 'attributes' && rec.attributeName === 'style')) {
+      bumpSubtree(el)
+      const parent = el.parentElement
+      if (parent) {
+        for (let s = parent.firstElementChild; s; s = s.nextElementSibling) {
+          if (s !== el) bumpNode(s)
+        }
+      }
+      for (let p = parent; p; p = p.parentElement) bumpNode(p)
       continue
     }
     invalidateAround(el)
@@ -344,7 +383,76 @@ function snapshotComputedStyleFull(style, options = {}) {
     if (!hasBorderImage) out['border'] = 'none'
   }
 
+  applyBgClipTextFallback(out)
+
   return out
+}
+
+/**
+ * Firefox cannot rasterize background-clip:text inside an SVG foreignObject
+ * image (https://bugzilla.mozilla.org/show_bug.cgi?id=1481498 territory): the
+ * background is dropped entirely, so gradient text whose color is transparent
+ * comes out as nothing at all. Approximate it with a plain text color — the
+ * average of the gradient's stops — which loses the gradient but keeps the
+ * words. Only fires when the text would otherwise be invisible.
+ * @param {Record<string,string>} out mutable style snapshot
+ */
+function applyBgClipTextFallback(out) {
+  if (!isFirefox()) return
+  const clip = out['background-clip'] || out['-webkit-background-clip']
+  if (!clip || !clip.includes('text')) return
+  const transparent = (v) => v === 'transparent' || v === 'rgba(0, 0, 0, 0)'
+  // -webkit-text-fill-color paints the glyphs when set; color is the fallback.
+  const fill = out['-webkit-text-fill-color']
+  if (!transparent(fill !== undefined ? fill : out['color'])) return
+  const solid =
+    bgClipTextFallbackColor(out['background-image'], out['background-color'])
+  if (!solid) return
+  if (transparent(out['color'])) out['color'] = solid
+  if (fill !== undefined) out['-webkit-text-fill-color'] = solid
+  out['background-image'] = 'none'
+  out['background-color'] = 'transparent'
+  delete out['background-clip']
+  delete out['-webkit-background-clip']
+  // Other passes re-inline the live values onto the clone over the class this
+  // snapshot becomes — resolveCSSVars materializes the transparent color,
+  // normalizeInlineStyleToComputed re-inlines an authored gradient — so the
+  // fallback must also be written inline with !important; inlineAllStyles
+  // reads this marker. Non-enumerable: signature/key iteration must not see it.
+  Object.defineProperty(out, '__bgClipTextFix', { value: solid, enumerable: false })
+}
+
+/**
+ * A single color standing in for a clipped-to-text background: the channel
+ * average of every visible rgb()/rgba() in the background-image (computed
+ * gradients serialize their stops that way), else the background-color.
+ * @param {string} [backgroundImage]
+ * @param {string} [backgroundColor]
+ * @returns {string|null}
+ */
+export function bgClipTextFallbackColor(backgroundImage, backgroundColor) {
+  const collect = (value) => {
+    const colors = []
+    const re = /rgba?\(\s*(\d+)[,\s]+(\d+)[,\s]+(\d+)(?:[,\s/]+([\d.]+%?))?\s*\)/g
+    let m
+    while ((m = re.exec(value || ''))) {
+      const raw = m[4]
+      const alpha =
+        raw === undefined ? 1 : parseFloat(raw) / (raw.endsWith('%') ? 100 : 1)
+      if (alpha > 0.05) colors.push([+m[1], +m[2], +m[3]])
+    }
+    return colors
+  }
+  let colors = collect(backgroundImage)
+  if (!colors.length) colors = collect(backgroundColor)
+  if (!colors.length) return null
+  const sum = [0, 0, 0]
+  for (const [r, g, b] of colors) {
+    sum[0] += r
+    sum[1] += g
+    sum[2] += b
+  }
+  return `rgb(${sum.map((c) => Math.round(c / colors.length)).join(', ')})`
 }
 /**
  * Cheap "is this box sized by its own content?" check: any child element or non-whitespace
@@ -383,6 +491,15 @@ function getSnapshot(el, preStyle = null, options = {}) {
   const ef = !!(options && options.embedFonts)
   const ex = (options && options.excludeStyleProps) || null
   const now = performance.now()
+  const stats = globalThis.__snapStats
+  if (stats) {
+    if (!rec) stats.cold = (stats.cold || 0) + 1
+    else if (rec.epoch !== __epoch) stats.epoch = (stats.epoch || 0) + 1
+    else if (rec.stamp !== nodeStyleStamp(el)) stats.stamp = (stats.stamp || 0) + 1
+    else if (now - rec.at >= MAX_SNAPSHOT_AGE_MS) stats.age = (stats.age || 0) + 1
+    else if (rec.embedFonts !== ef || rec.excludeStyleProps !== ex) stats.options = (stats.options || 0) + 1
+    else stats.hit = (stats.hit || 0) + 1
+  }
   if (
     rec &&
     snapshotIsCurrent(rec.epoch, rec.stamp, rec.at, el, now) &&
@@ -395,7 +512,7 @@ function getSnapshot(el, preStyle = null, options = {}) {
   snapshotCache.set(el, {
     epoch: __epoch,
     stamp: nodeStyleStamp(el),
-    at: now,
+    at: jitteredWriteTime(now),
     snapshot: snap,
     embedFonts: ef,
     excludeStyleProps: ex
@@ -501,6 +618,17 @@ export async function inlineAllStyles(source, clone, sessionOrCtx, opts) {
   }
 
   const snap = getSnapshot(source, pre, ctx.options)
+
+  // Firefox background-clip:text fallback (see applyBgClipTextFallback): the
+  // class carries the substitute color, but resolveCSSVars and the authored
+  // inline-style normalization above re-inline the live transparent color and
+  // gradient over any class. Inline !important outranks them all.
+  if (snap.__bgClipTextFix && clone && clone.style) {
+    clone.style.setProperty('background-image', 'none', 'important')
+    clone.style.setProperty('background-color', 'transparent', 'important')
+    clone.style.setProperty('color', snap.__bgClipTextFix, 'important')
+    clone.style.setProperty('-webkit-text-fill-color', snap.__bgClipTextFix, 'important')
+  }
 
   const flexItem = isFlexOrGridItem(source)
 

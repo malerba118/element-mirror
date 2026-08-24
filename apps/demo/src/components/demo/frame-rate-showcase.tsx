@@ -1,6 +1,7 @@
 'use client'
 
 import { ElementMirror } from '@frostin/element-mirror'
+
 import { MirrorSource } from '@/components/demo/mirror-source'
 import { CodeBlock } from '@/components/demo/section'
 import { Badge } from '@/components/ui/badge'

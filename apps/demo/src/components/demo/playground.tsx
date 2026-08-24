@@ -3,6 +3,7 @@
 import * as React from 'react'
 
 import { ElementMirror } from '@frostin/element-mirror'
+
 import { PlayerSource } from '@/components/demo/player-source'
 import { CodeBlock } from '@/components/demo/section'
 import { Badge } from '@/components/ui/badge'
@@ -33,20 +34,17 @@ import {
 
 /** What CSS size the canvas is given, if any. */
 type Layout = 'natural' | 'intrinsic' | 'boxed'
-type Fit = NonNullable<React.CSSProperties['objectFit']>
 
-const FIT_VALUES: Fit[] = ['fill', 'contain', 'cover', 'none', 'scale-down']
 const POSITION_VALUES = ['center', 'top', 'bottom', 'left', 'right']
 
 export function Playground() {
   const sourceRef = React.useRef<HTMLDivElement>(null)
-  const [fps, setFps] = React.useState(12)
+  const [fps, setFps] = React.useState(30)
   const [delay, setDelay] = React.useState(0)
   const [pixelRatio, setPixelRatio] = React.useState(2)
   const [layout, setLayout] = React.useState<Layout>('boxed')
   const [width, setWidth] = React.useState(320)
   const [height, setHeight] = React.useState(160)
-  const [objectFit, setObjectFit] = React.useState<Fit>('contain')
   const [objectPosition, setObjectPosition] = React.useState('center')
   const [transparent, setTransparent] = React.useState(true)
   const [paused, setPaused] = React.useState(false)
@@ -65,7 +63,6 @@ export function Playground() {
       `pixelRatio={${pixelRatio}}`,
     ]
     if (delay > 0) props.push(`delay={${delay}}`)
-    if (boxed) props.push(`objectFit="${objectFit}"`)
     if (boxed && objectPosition !== 'center') {
       props.push(`objectPosition="${objectPosition}"`)
     }
@@ -82,7 +79,6 @@ export function Playground() {
     fps,
     height,
     layout,
-    objectFit,
     objectPosition,
     paused,
     pixelRatio,
@@ -123,12 +119,11 @@ export function Playground() {
                 fps={fps}
                 delay={delay}
                 pixelRatio={pixelRatio}
-                objectFit={objectFit}
                 objectPosition={objectPosition}
                 background={transparent ? null : '#ffffff'}
                 paused={paused}
                 style={mirrorStyle}
-                className="block rounded-md"
+                className="rounded-md"
               />
             </div>
           </CardContent>
@@ -241,31 +236,11 @@ export function Playground() {
           </div>
 
           <div className="space-y-3">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Label className="w-fit">objectFit</Label>
-              </TooltipTrigger>
-              <TooltipContent side="right">
-                Only has an effect once the canvas has both a width and a height
-                to fill.
-              </TooltipContent>
-            </Tooltip>
-            <Select
-              value={objectFit}
-              disabled={!boxed}
-              onValueChange={(value) => setObjectFit(value as Fit)}
-            >
-              <SelectTrigger className="w-full">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {FIT_VALUES.map((value) => (
-                  <SelectItem key={value} value={value}>
-                    {value}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label className="w-fit">objectFit</Label>
+            <p className="text-xs text-muted-foreground">
+              Not a prop. There is one fit: the source&apos;s box, scaled
+              uniformly to whatever box CSS gave the mirror.
+            </p>
           </div>
 
           <div className="space-y-3">
@@ -274,8 +249,8 @@ export function Playground() {
                 <Label className="w-fit">objectPosition</Label>
               </TooltipTrigger>
               <TooltipContent side="right">
-                Decides which part survives a crop, or where a letterboxed
-                capture sits.
+                Decides where the source&apos;s box sits in the space it did
+                not fill.
               </TooltipContent>
             </Tooltip>
             <Select

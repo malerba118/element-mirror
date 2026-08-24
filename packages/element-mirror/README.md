@@ -1,9 +1,12 @@
 # @frostin/element-mirror
 
 A React component that mirrors any DOM element into a `<canvas>`, repainting up
-to sixty times a second. The canvas sizes the same way an `<img>` of the source
-would: left alone it takes the source's own dimensions, and any CSS you give it
-wins from there.
+to sixty times a second. The mirror sizes the same way an `<img>` of the source
+would: left alone it takes the source's own layout size, and any CSS you give
+it wins from there. It lays out like the source's layout box and paints like
+the source's transform: a rotating source keeps a rock-steady mirror, and a
+shadow or a focus ring that spills outside the source's box spills outside the
+mirror's too.
 
 ```tsx
 import { ElementMirror } from '@frostin/element-mirror'
@@ -12,7 +15,7 @@ const cardRef = useRef<HTMLDivElement>(null)
 
 <div ref={cardRef}>…</div>
 
-<ElementMirror source={cardRef} fps={12} />
+<ElementMirror source={cardRef} />
 ```
 
 Captures come from [`@frostin/snapdom`](https://www.npmjs.com/package/@frostin/snapdom),
@@ -28,15 +31,17 @@ at 2x) a capture costs ~5ms of main thread, and a mirror asked for 60fps gets
 | Prop             | Type                                              | Default            | Notes                                                                                                |
 | ---------------- | ------------------------------------------------- | ------------------ | ---------------------------------------------------------------------------------------------------- |
 | `source`         | `Element \| RefObject<Element \| null> \| string` | —                  | The element to mirror, as an element, a ref, or a CSS selector.                                      |
-| `fps`            | `number`                                          | `12`               | Maximum captures per second, up to the display refresh rate.                                         |
+| `fps`            | `number \| () => number`                          | `30`               | Maximum captures per second, up to the display refresh rate. A function is read every capture cycle. |
 | `delay`          | `number`                                          | `0`                | Milliseconds behind the source to run.                                                               |
 | `pixelRatio`     | `number`                                          | `devicePixelRatio` | Bitmap pixels captured per CSS pixel.                                                                |
-| `objectFit`      | `ObjectFit`                                       | `'fill'`           | Applies once the canvas has both a width and a height.                                               |
-| `objectPosition` | `string`                                          | `'center'`         | Alignment when `objectFit` crops or letterboxes.                                                     |
+| `objectPosition` | `string`                                          | `'center'`         | Where the source's box sits when CSS gives the mirror a box of a different ratio.                    |
 | `background`     | `string \| null`                                  | `null`             | Fill behind the element. `null` keeps transparency.                                                  |
 | `paused`         | `boolean`                                         | `false`            | Stop capturing and hold a frame. Paused before it has one, a mirror captures a single frame to hold. |
 
-Anything else is forwarded to the canvas, and `ref` points at the canvas.
+Anything else is forwarded to the element that holds the mirror's box, and
+`ref` points at it. The canvas inside is positioned out of flow — what it
+paints is not what the mirror occupies — and is marked `data-element-mirror`
+for anything measuring a mirror from the outside.
 
 A mirror shows nothing until its first capture arrives. Captures cannot be taken
 synchronously, so a canvas that painted straight away would put an empty box on
@@ -92,19 +97,60 @@ There is no sizing prop. The source supplies a natural size and an aspect ratio,
 CSS decides everything else, and the rules are the ones you already use on an
 image:
 
-- nothing — the canvas comes out at the source's own width and height.
+- nothing — the mirror comes out at the source's own width and height.
 - width only — height follows the source's aspect ratio, and vice versa.
-- width and height — `objectFit` decides between cropping (`cover`) and
-  letterboxing (`contain`), and `objectPosition` decides what survives it.
+- width and height — the source's box is scaled uniformly to the largest size
+  that fits inside, and `objectPosition` decides where it sits in the space it
+  did not fill.
 
 CSS wins in every case, whether it comes from a class, a stylesheet, or the
-`style` prop. Sizing the canvas never changes what is captured: the bitmap is
+`style` prop. Sizing the mirror never changes what is captured: the bitmap is
 always the source at `pixelRatio`, so a mirror left at its natural size is still
 crisp on a retina display.
 
-Under the hood the canvas declares only an intrinsic size (`contain: size` +
-`contain-intrinsic-size`), so any width or height from CSS still wins, exactly
-as it does on an image.
+There is deliberately no `objectFit`: a mirror that stretched its capture to
+fill a box would have to stretch the paint that left the box along with it, so
+there is one fit and it is uniform. The way to cover a box is the way you would
+cover it with any oversized image — size the mirror to the smallest box that
+covers, and let the container crop it:
+
+```tsx
+<div className="relative aspect-video overflow-hidden">
+  <ElementMirror
+    source={videoRef}
+    className="absolute top-1/2 left-1/2 min-h-full min-w-full"
+    style={{ width: 'auto', height: 'auto', transform: 'translate(-50%, -50%)' }}
+  />
+</div>
+```
+
+Under the hood the wrapper holds an invisible replaced element in flow, sized
+to the source, so the box resolves by replaced-element sizing — the algorithm
+every engine already agrees on for an image — and any width or height from CSS
+still wins, exactly as it does on one.
+
+### The mirror's box
+
+A mirror's box is the box the source _laid out_ in — not the box it occupies on
+screen, which a `transform` moves and scales every frame. The capture is painted
+wherever the source's transform put it, at the source's own scale, out of flow
+and outside the box if that is where it went. A mirror of an animating element
+keeps a still box while the paint moves inside and past it, which is what makes
+it usable for trails, echoes and motion blur — and it is the same division CSS
+itself uses, where transforms never affect layout.
+
+The paint reaches past the box for untransformed sources too: a shadow, an
+outline, a focus ring, or — the common case, since Tailwind's `ring` utilities
+are box shadows — a card's border-like ring all land outside the mirror's box
+in the same place the source's do.
+
+Nothing declares how far a mirror paints. Every frame arrives with the geometry
+of the capture it came from, so the canvas is sized to hold the frame before that
+frame is drawn — never after one came out clipped — and it takes the room in
+whole pixels, doubling while the paint keeps reaching further and giving it back
+once the reach has held smaller for a while. A ring costs a pixel a side; an
+animation sweeping two hundred pixels out and back costs a handful of
+reallocations, which `.perf/bleed.mjs` measures along with everything else.
 
 ### Blurred backdrops
 
@@ -117,10 +163,14 @@ itself sit on top.
 <div className="relative aspect-video overflow-hidden">
   <ElementMirror
     source={videoRef}
-    objectFit="cover"
     pixelRatio={0.5}
-    className="absolute inset-0 h-full w-full"
-    style={{ filter: 'blur(28px)', transform: 'scale(1.15)' }}
+    className="absolute top-1/2 left-1/2 min-h-full min-w-full"
+    style={{
+      width: 'auto',
+      height: 'auto',
+      filter: 'blur(28px)',
+      transform: 'translate(-50%, -50%) scale(1.15)',
+    }}
   />
   <video ref={videoRef} className="relative mx-auto h-full w-auto" … />
 </div>
@@ -163,6 +213,35 @@ visibly softens. The dragged element has to stay laid out (it is the capture
 source), and its own `opacity` is captured with everything else, so draw the
 empty slot as an overlay rather than fading the source.
 
+### The text caret
+
+A focused field's caret never appears in a mirror, because it was never in the
+DOM: the browser draws it over the field at paint time, and its blink runs on
+a clock the platform does not expose — so even an engine that painted a bar
+where the caret sits could not blink it. `TextCaret` turns the caret into DOM
+instead. It hides the native one (`caret-color: transparent`) and renders a
+real element where the caret is, so it lands in captures like everything else,
+blink included — the blink is a Web Animation, which the capture loop treats
+as live content while it runs and stops billing for the moment the caret
+hides.
+
+```tsx
+<div className="relative">
+  <input ref={inputRef} type="text" … />
+  <TextCaret input={inputRef} />
+</div>
+```
+
+Render it inside a positioned ancestor shared with the field. Unstyled it
+matches the native caret — one pixel of the field's own color, blinking on the
+usual cadence, held solid for a beat after every move; `style` and `className`
+land on the caret element, so width, color, glow and radius are yours, while
+position and height are measured and written by the component. It follows the
+same platform rule as selection capture: the field must expose the selection
+API (`text`, `search`, `url`, `tel`, `password` — not `email` or `number`),
+and it hides while the field is unfocused or a range is selected, which is
+what the native caret does.
+
 ## Cost and rate
 
 A capture reads computed styles over the source subtree on the main thread and
@@ -183,6 +262,18 @@ what mutated. One loop drives every mirror on the page:
 A requested rate is what arrives: frames are booked from when the previous one
 was due, and the loop wakes on displayed frames, so a rate below the refresh
 rate looks steady rather than merely being steady.
+
+A discrete change — a keystroke, a focus ring, a selection — is captured ahead
+of the fps grid rather than waiting for the next slot, but never ahead of the
+mirror's own interval, so at a low idle rate the change can still sit unseen
+for most of one. That is what a function `fps` is for: return a higher rate
+for a beat after the user interacts and the change's own event finds the short
+interval already in force. The function form exists because merely *asking*
+must cost nothing — swapping a numeric `fps` re-subscribes, and a fresh
+subscription captures immediately, which spends the main thread at the exact
+moment the interaction's own events need it. The demo's glass-floor page runs
+15fps idle and 45fps for 400ms after a touch, which is what carries a
+double-click's highlight into the reflection within a frame or two.
 
 Mirror canvases carry `data-element-mirror-ignore`, so a mirror nested inside
 another capture is skipped rather than recursing visually.

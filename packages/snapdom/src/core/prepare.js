@@ -11,6 +11,7 @@ import { cache } from '../core/cache.js'
 import { resolveBlobUrlsInTree } from '../utils/clone.helpers.js'
 import { stabilizeLayout, forceContentVisibility } from '../utils/prepare.helpers.js'
 import { resolveClipRect, freezeViewportPositioned } from '../utils/capture.helpers.js'
+import { prepareSelectionContext } from '../modules/selection.js'
 
 /**
  * Prepares a clone of an element for capture, inlining pseudo-elements and generating CSS classes.
@@ -32,6 +33,16 @@ export async function prepareClone(element, options = {}) {
     styleCache: session.styleCache,
     nodeMap: session.nodeMap,
     options
+  }
+
+  // SEL-1: read the live selection once per capture; the clone pass wraps the
+  // selected runs of text it finds inside these ranges.
+  if (options.captureSelection) {
+    try {
+      sessionCache.selection = prepareSelectionContext(element)
+    } catch (e) {
+      debugWarn(sessionCache, 'prepareSelectionContext failed', e)
+    }
   }
 
   let clipWindow = null

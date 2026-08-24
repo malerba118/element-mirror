@@ -29,6 +29,12 @@ import {
  * which turns a hole in the detection into a moment of staleness rather than a
  * mirror that is wrong until something else happens to it.
  *
+ * A detected change also wakes the loop and is captured on the frame it
+ * happened rather than at the next slot on the fps grid, which would hold a
+ * discrete change — a focus ring, a keystroke — unshown for up to a whole
+ * interval. The cadence rebases to the change, so `fps` stays a rate cap and
+ * stops being a latency floor (see pump).
+ *
  * Capturing and presenting are separate. Captures accumulate in a per-source
  * timeline, and each mirror is drawn the frame matching its own `delay`, so a
  * mirror running behind the source has a new frame to show whenever one ages
@@ -125,6 +131,52 @@ const REPAINT_LISTENER: AddEventListenerOptions = {
   passive: true,
 }
 
+/**
+ * What a frame depicts, beyond its pixels.
+ *
+ * A capture is a picture of the box an element paints into, which for a
+ * transformed element is neither the box it laid out in nor in the same place.
+ * Recorded here at the moment of capture, so a mirror can place a frame where
+ * the source was when it was taken rather than where the source is now — the
+ * difference between a trail of ghosts along a path and a stack of them under
+ * the live element.
+ */
+export interface FrameGeometry {
+  /** The box the source laid out in, which its own transform cannot affect. */
+  layoutWidth: number
+  layoutHeight: number
+  /**
+   * How far the source's own transform moved it, in CSS pixels. Only the
+   * moving part: what the transform did to the shape is in the bitmap already,
+   * because the engine bakes it and widens the capture to fit, while a
+   * translation is stripped and left to the caller — a mirror is somewhere else
+   * on the page, so where its source was pushed to is a fact about the source
+   * rather than about where the mirror should paint.
+   */
+  translateX: number
+  translateY: number
+  /**
+   * Where the bitmap's top-left sits relative to the layout box's, in CSS
+   * pixels, and where the source's painted box landed inside the bitmap. Zero
+   * and the layout box's own size for a capture of something plain; a capture
+   * widens per side for whatever paints outside the box — a rotation's corners,
+   * a shadow, a child's ring — so a caller placing the bitmap has to be told.
+   */
+  originX: number
+  originY: number
+  boxX: number
+  boxY: number
+  boxWidth: number
+  boxHeight: number
+  /**
+   * Bitmap pixels per CSS pixel in this capture, which is the highest any
+   * mirror of the source asked for rather than what any one of them wanted.
+   * A caller drawing the bitmap at a size of its own choosing needs this to
+   * know what size it already is.
+   */
+  pixelRatio: number
+}
+
 export interface MirrorSubscriber {
   /** Resolved each cycle, so a source may appear, change, or disappear. */
   resolve: () => Element | null
@@ -138,7 +190,8 @@ export interface MirrorSubscriber {
   onFrame: (
     bitmap: HTMLCanvasElement,
     sourceWidth: number,
-    sourceHeight: number
+    sourceHeight: number,
+    geometry: FrameGeometry
   ) => void
 }
 
@@ -164,6 +217,7 @@ interface Frame {
   /** The source's CSS size at the time, so a lagging mirror lags in size too. */
   width: number
   height: number
+  geometry: FrameGeometry
   /**
    * Whether the canvas holds the frame yet. A capture returns to the loop when
    * its main-thread work is done, and the browser may still be rasterizing;
@@ -197,6 +251,14 @@ interface SourceState {
   costMs: number
   /** Playback positions of any videos, to notice frames advancing. */
   videoSignature: string
+  /**
+   * The descendants the liveness check asks about, kept rather than queried
+   * every cycle. Dropped when a mutation could have changed which nodes match,
+   * which the observer below already hears about.
+   */
+  nodes: { videos: HTMLVideoElement[]; canvases: Element[] } | null
+  /** Whether the last selectionchange saw the selection touch this source. */
+  hadSelection: boolean
   lastSeenAt: number
   /** When this source was first wanted, bounding the first-frame wait. */
   wantedSince: number
@@ -208,6 +270,25 @@ interface SourceState {
 const subscribers = new Map<MirrorSubscriber, SubscriberState>()
 const sources = new Map<Element, SourceState>()
 
+/**
+ * Bounds the dev-only instrumentation. Marks and measures sit in the
+ * performance timeline until someone clears them, and nobody ever does: a
+ * mirror capturing overnight writes millions of entries into a buffer the
+ * browser never trims. Cleared in batches large enough that the .perf
+ * scripts, which read a window of recent entries, still find theirs.
+ */
+const PERF_ENTRY_LIMIT = 5000
+let perfEntries = 0
+
+function notePerfEntry() {
+  perfEntries += 1
+  if (perfEntries < PERF_ENTRY_LIMIT) return
+  perfEntries = 0
+  performance.clearMarks('em:dirty')
+  performance.clearMeasures('em:main')
+  performance.clearMeasures('em:settled')
+}
+
 function stateFor(element: Element, now: number) {
   let state = sources.get(element)
   if (!state) {
@@ -218,13 +299,28 @@ function stateFor(element: Element, now: number) {
       lastCaptureAt: 0,
       costMs: 0,
       videoSignature: '',
+      nodes: null,
+      hadSelection: false,
       lastSeenAt: now,
       wantedSince: now,
-      mutation: new MutationObserver(() => {
-        created.dirty = true
+      mutation: new MutationObserver((records) => {
+        // The cached lookups answer "which videos, which canvases", so only a
+        // change of shape can invalidate them — plus a flip of the ignore
+        // attribute, which decides whether a canvas is a mirror's or the
+        // page's. Every other mutation leaves them correct.
+        for (const record of records) {
+          if (
+            record.type === 'childList' ||
+            record.attributeName === IGNORE_ATTRIBUTE
+          ) {
+            created.nodes = null
+            break
+          }
+        }
+        markDirty()
       }),
       resize: new ResizeObserver(() => {
-        created.dirty = true
+        markDirty()
       }),
       unlisten: () => {},
     }
@@ -236,8 +332,19 @@ function stateFor(element: Element, now: number) {
     })
     created.resize.observe(element)
 
+    // Waking the loop is what lets a change be captured on the frame it
+    // happened rather than at the next slot on the fps grid (see pump, which
+    // pulls a dirty source's subscribers forward). Referenced by the observers
+    // above, which is safe: they cannot fire before this line runs.
     const markDirty = () => {
+      // Dev-only breadcrumb; .perf/latency-grid.mjs measures the distance
+      // from this mark to the capture it provokes.
+      if (process.env.NODE_ENV !== 'production') {
+        performance.mark('em:dirty')
+        notePerfEntry()
+      }
       created.dirty = true
+      kick()
     }
     for (const type of REPAINT_EVENTS) {
       element.addEventListener(type, markDirty, REPAINT_LISTENER)
@@ -260,6 +367,34 @@ function forget(element: Element, state: SourceState) {
   state.resize.disconnect()
   state.unlisten()
   sources.delete(element)
+}
+
+/** Whether any part of the current selection lies within the element. */
+function selectionTouches(selection: Selection | null, element: Element) {
+  // A text field's selection lives on the field rather than in a Range, and
+  // is painted only while the field is focused — which also means the focused
+  // field is the only one whose selection can be showing.
+  const active = document.activeElement
+  if (
+    active &&
+    element.contains(active) &&
+    (active instanceof HTMLInputElement || active instanceof HTMLTextAreaElement)
+  ) {
+    try {
+      if (active.selectionStart !== active.selectionEnd) return true
+    } catch {
+      // An input type without a selection API cannot show one.
+    }
+  }
+  if (!selection || selection.isCollapsed) return false
+  for (let index = 0; index < selection.rangeCount; index += 1) {
+    try {
+      if (selection.getRangeAt(index).intersectsNode(element)) return true
+    } catch {
+      // A range from a foreign tree cannot touch this element.
+    }
+  }
+  return false
 }
 
 /** The element itself plus any descendants matching the selector. */
@@ -306,21 +441,72 @@ function mediaStillLoading(element: Element) {
   return false
 }
 
+/** The descendants the liveness check asks about, queried once per shape. */
+function nodesFor(state: SourceState, element: Element) {
+  let found = state.nodes
+  if (!found) {
+    found = {
+      videos: selfAndDescendants(element, 'video') as HTMLVideoElement[],
+      canvases: selfAndDescendants(
+        element,
+        `canvas:not([${IGNORE_ATTRIBUTE}])`
+      ),
+    }
+    state.nodes = found
+  }
+  return found
+}
+
+/**
+ * Elements with a running animation on them, read once per cycle of the loop.
+ *
+ * Asked of the document rather than of each source, and answered by
+ * containment. `getAnimations({ subtree: true })` walks the subtree it is
+ * asked about, so asking per source pays for the whole subtree once per source
+ * per cycle to learn something a page has only a handful of instances of;
+ * asking the document costs one walk however many sources read the answer.
+ *
+ * Cleared at the top of each pump. An animation that starts mid-cycle is
+ * therefore noticed on the next one, which is the same latency it already had:
+ * starting an animation marks nothing dirty, and this check is how it gets
+ * found at all.
+ *
+ * Blind to an animation running inside a source's shadow tree, as the subtree
+ * read was: Chrome reports those only from the animated element itself or from
+ * the shadow root, never from the host or the document (`.perf/shadow-probe.mjs`
+ * asks it). Such a source is left to the VERIFY_MS re-capture.
+ */
+let animated: Element[] | null = null
+
+function animatedElements() {
+  if (animated) return animated
+  const found: Element[] = []
+  for (const animation of document.getAnimations?.() ?? []) {
+    if (animation.playState !== 'running') continue
+    const effect = animation.effect
+    // A pseudo-element's animation reports the element it belongs to, which is
+    // the one whose paint changes, so it needs no special case.
+    const target = effect instanceof KeyframeEffect ? effect.target : null
+    if (target) found.push(target)
+  }
+  animated = found
+  return found
+}
+
 /**
  * Content that repaints without mutating the DOM, which a MutationObserver
  * cannot see: running CSS animations and transitions, playing video, and
  * canvases other than mirrors.
  */
 function hasLiveContent(state: SourceState, target: Element) {
-  const animations = target.getAnimations?.({ subtree: true }) ?? []
-  for (const animation of animations) {
-    if (animation.playState === 'running') return true
+  for (const element of animatedElements()) {
+    if (target.contains(element)) return true
   }
 
   // A video advancing is invisible to observers, and so is a seek while
   // paused, but both move currentTime. Comparing positions covers each case
   // without keeping a paused video's mirror capturing forever.
-  const videos = selfAndDescendants(target, 'video') as HTMLVideoElement[]
+  const { videos, canvases } = nodesFor(state, target)
   if (videos.length > 0) {
     const signature = videos.map((video) => video.currentTime).join(',')
     if (signature !== state.videoSignature) {
@@ -330,15 +516,23 @@ function hasLiveContent(state: SourceState, target: Element) {
   }
 
   // A canvas can repaint with no observable trace at all, so assume it did.
-  return (
-    selfAndDescendants(target, `canvas:not([${IGNORE_ATTRIBUTE}])`).length > 0
-  )
+  return canvases.length > 0
 }
 
 let timer: number | undefined
 let frame: number | undefined
 let wakeAt = Number.POSITIVE_INFINITY
 let pumping = false
+/**
+ * A wake asked for while a pump was already in flight.
+ *
+ * That pump cannot serve it: its subscriber list was taken at the top, and the
+ * wake it books on the way out comes from those subscribers alone. A mirror
+ * that subscribed meanwhile would be left with nothing scheduled at all, and
+ * since the loop only wakes when something schedules it, one mistimed
+ * subscription would stop every mirror on the page rather than just its own.
+ */
+let kicked = false
 
 /**
  * Assumed length of a displayed frame, used to align to one.
@@ -370,10 +564,18 @@ function unschedule() {
  * apart, then one three refreshes later. Waking on an animation frame instead
  * quantises the loop to the display, which is what makes a rate below the
  * refresh rate look steady rather than merely be steady.
+ *
+ * `immediate` skips that alignment and wakes on the next task instead, which
+ * is for reacting rather than pacing: a change just happened, and an animation
+ * frame is the better part of a refresh away — further on a page whose frames
+ * are long, which is exactly the page that needs the head start. Alignment
+ * buys nothing here, because a lone reactive capture has no cadence to keep
+ * steady, and a capture finished mid-frame just sits until the next paint
+ * carries it out.
  */
-function scheduleAt(time: number) {
+function scheduleAt(time: number, immediate = false) {
   if (timer !== undefined || frame !== undefined) {
-    if (time >= wakeAt) return
+    if (time >= wakeAt && !immediate) return
     unschedule()
   }
   wakeAt = time
@@ -383,6 +585,11 @@ function scheduleAt(time: number) {
     frame = undefined
     wakeAt = Number.POSITIVE_INFINITY
     void pump()
+  }
+
+  if (immediate) {
+    timer = window.setTimeout(run, 0)
+    return
   }
 
   const delay = time - performance.now()
@@ -446,6 +653,112 @@ function needsCapture(state: SourceState, element: Element, now: number) {
   return now - state.lastCaptureAt >= VERIFY_MS
 }
 
+const px = (value: string) => Number.parseFloat(value) || 0
+
+/** A computed length or percentage of a basis, in pixels. */
+function lengthOf(value: string, basis: number) {
+  return value.endsWith('%') ? (px(value) / 100) * basis : px(value)
+}
+
+/**
+ * The element's own transform, as a 2D matrix.
+ *
+ * `transform` and the individual `translate`, `rotate` and `scale` properties
+ * are separate computed values that compose in that fixed order, so reading
+ * `transform` alone would miss half of what a caller can write. Rotations out
+ * of the plane are left out rather than flattened: their painted box is a
+ * projection, and pretending otherwise would place it confidently wrong.
+ */
+function readTransform(
+  style: CSSStyleDeclaration,
+  width: number,
+  height: number
+) {
+  let matrix = new DOMMatrix()
+
+  const translate = style.getPropertyValue('translate')
+  if (translate && translate !== 'none') {
+    const parts = translate.split(' ')
+    matrix = matrix.translate(
+      lengthOf(parts[0], width),
+      lengthOf(parts[1] ?? '0px', height)
+    )
+  }
+
+  const rotate = style.getPropertyValue('rotate')
+  if (rotate && rotate !== 'none') {
+    // A bare angle, or an axis and then the angle.
+    const parts = rotate.trim().split(/\s+/)
+    const inPlane =
+      parts.length === 1 || parts[0] === 'z' || parts.slice(0, 3).join(' ') === '0 0 1'
+    if (inPlane) matrix = matrix.rotate(px(parts[parts.length - 1]))
+  }
+
+  const scale = style.getPropertyValue('scale')
+  if (scale && scale !== 'none') {
+    const parts = scale.trim().split(/\s+/)
+    matrix = matrix.scale(px(parts[0]), px(parts[1] ?? parts[0]))
+  }
+
+  if (style.transform && style.transform !== 'none') {
+    matrix = matrix.multiply(new DOMMatrix(style.transform))
+  }
+  return matrix
+}
+
+/**
+ * The source's box and how far its transform moved it.
+ *
+ * Read from the layout box and the transform rather than from the painted rect,
+ * because the rect is the two of them already combined and there is no undoing
+ * that: a 45° rotation of a square has the same painted box as a larger
+ * unrotated one. What the capture itself knows — how far it had to widen, and
+ * where — is filled in from the capture (see CaptureHandle).
+ */
+function readGeometry(
+  element: Element,
+  pixelRatio: number
+): Omit<
+  FrameGeometry,
+  'originX' | 'originY' | 'boxX' | 'boxY' | 'boxWidth' | 'boxHeight'
+> {
+  const style = getComputedStyle(element)
+
+  // What `width` reports is the box `box-sizing` refers to, which is the
+  // border box under `border-box` and the content box otherwise — the same
+  // 120.5px for an element that lays out at 120.5 in the first case and at
+  // 130.5 in the second. Either way it stays the box the element laid out in
+  // while a transform moves the painted one somewhere else entirely.
+  const inner = style.boxSizing === 'border-box' ? 0 : 1
+  const layoutWidth =
+    px(style.width) +
+    inner *
+      (px(style.paddingLeft) +
+        px(style.paddingRight) +
+        px(style.borderLeftWidth) +
+        px(style.borderRightWidth))
+  const layoutHeight =
+    px(style.height) +
+    inner *
+      (px(style.paddingTop) +
+        px(style.paddingBottom) +
+        px(style.borderTopWidth) +
+        px(style.borderBottomWidth))
+
+  // Only the translation. Turning and scaling about the transform's origin is
+  // the engine's business — it bakes both into the bitmap and reports where
+  // that left the box — and taking it from here as well would apply it twice.
+  const matrix = readTransform(style, layoutWidth, layoutHeight)
+
+  return {
+    layoutWidth,
+    layoutHeight,
+    translateX: matrix.e,
+    translateY: matrix.f,
+    pixelRatio,
+  }
+}
+
 /**
  * Adds a frame to the source's timeline if one is warranted.
  *
@@ -456,6 +769,7 @@ async function capture(
   element: Element,
   state: SourceState,
   due: MirrorSubscriber[],
+  all: MirrorSubscriber[],
   now: number
 ) {
   // One layout read per capture, shared by every mirror of this element.
@@ -491,9 +805,7 @@ async function capture(
   // Marking the element dirty guarantees a capture once it recovers.
   if (
     state.timeline.length > 0 &&
-    (selfAndDescendants(element, 'video') as HTMLVideoElement[]).some(
-      cannotDrawVideo
-    )
+    nodesFor(state, element).videos.some(cannotDrawVideo)
   ) {
     state.dirty = true
     return null
@@ -504,12 +816,23 @@ async function capture(
     return null
   }
 
+  // Every mirror of the source has a say in the density, not just the ones due
+  // this cycle: the frame joins a timeline all of them read from, so it has to
+  // satisfy the most demanding one whenever it is the newest frame there is.
+  // Asking only the due list let a coarse mirror on a slow clock drop a
+  // low-resolution frame into shared history, which the fine ones then had to
+  // show until the next capture — a flicker at the coarse mirror's rate.
   const pixelRatio = Math.max(
-    ...due.map(
+    ...all.map(
       (subscriber) => subscriber.pixelRatio ?? window.devicePixelRatio ?? 1
     )
   )
   const canvas = state.pool.pop() ?? document.createElement('canvas')
+
+  // Read here rather than alongside the rect above, so that it describes the
+  // moment the capture starts rather than the moment the loop got round to
+  // considering this source.
+  const measured = readGeometry(element, pixelRatio)
 
   // Cleared before the capture: a mutation arriving mid-capture should leave
   // the element dirty rather than be swallowed by this frame.
@@ -529,6 +852,10 @@ async function capture(
     return null
   }
   state.lastCaptureAt = performance.now()
+  if (process.env.NODE_ENV !== 'production') {
+    performance.measure('em:main', { start: started, end: state.lastCaptureAt })
+    notePerfEntry()
+  }
   // What throttling is protecting is the main thread, so the engine reports
   // its own work apart from time spent awaiting the browser's rasterizer, and
   // only the work is billed. SnapDOM decodes its SVG off-thread: billing the
@@ -545,16 +872,22 @@ async function capture(
   // Timestamped from the start of the capture, which is the moment it depicts.
   // Joins the timeline now, unready, so frames sit in capture order however
   // rasterization completes; presented the moment the pixels land.
+  const geometry: FrameGeometry = { ...measured, ...handle.geometry }
   const frame: Frame = {
     canvas,
     capturedAt: started,
     width: rect.width,
     height: rect.height,
+    geometry,
     ready: false,
   }
   state.timeline.push(frame)
   handle.settled.then(
     () => {
+      if (process.env.NODE_ENV !== 'production') {
+        performance.measure('em:settled', { start: started })
+        notePerfEntry()
+      }
       frame.ready = true
       // The mirrors this capture was for get it the moment it lands rather
       // than at their next scheduled cycle. The shownAt guard keeps this from
@@ -606,7 +939,7 @@ function present(due: MirrorSubscriber[], state: SourceState, now: number) {
     // A frame already on the canvas is worth nothing to draw again, which is
     // what keeps a still source from repainting its mirrors every cycle.
     if (subscriberState.shownAt === frame.capturedAt) continue
-    subscriber.onFrame(frame.canvas, frame.width, frame.height)
+    subscriber.onFrame(frame.canvas, frame.width, frame.height, frame.geometry)
     subscriberState.shownAt = frame.capturedAt
     subscriberState.painted = true
     counters.blits += 1
@@ -671,7 +1004,7 @@ async function serviceSource(
   const now = performance.now()
   const state = stateFor(element, now)
 
-  const retryAt = await capture(element, state, due, now)
+  const retryAt = await capture(element, state, due, all, now)
 
   const painted = performance.now()
   present(due, state, painted)
@@ -687,6 +1020,10 @@ async function pump() {
   try {
     // Nothing is painting while the tab is hidden; visibilitychange resumes.
     if (document.hidden) return
+
+    // One document-wide read of what is animating, shared by every source
+    // serviced in this cycle (see animatedElements).
+    animated = null
 
     const now = performance.now()
     let next = Number.POSITIVE_INFINITY
@@ -714,8 +1051,24 @@ async function pump() {
       // running on a paint, and holding the frame back would only land it on
       // the following paint anyway, a whole refresh later.
       if (state.nextDueAt > now + FRAME_MS / 2) {
-        next = Math.min(next, state.nextDueAt)
-        continue
+        // Unless the source just changed. A slot on the fps grid is the right
+        // cadence for content that changes continuously, but for a discrete
+        // change — a focus ring, a keystroke — it is pure latency: the change
+        // sits captured-but-unshown for up to a whole interval. So a dirty
+        // source pulls its subscribers forward, and the cadence is rebased to
+        // now, which keeps the rate at fps and merely aligns its phase with
+        // the change. Only once a full interval has passed since the last
+        // capture, so a stream of events cannot exceed the asked-for rate.
+        const interval = subscriber.fps > 0 ? 1000 / subscriber.fps : Infinity
+        const changed =
+          sources.get(element)?.dirty === true &&
+          now - (sources.get(element)?.lastCaptureAt ?? 0) >=
+            interval - FRAME_MS / 2
+        if (!changed) {
+          next = Math.min(next, state.nextDueAt)
+          continue
+        }
+        state.nextDueAt = now
       }
       bucket.due.push(subscriber)
     }
@@ -737,13 +1090,21 @@ async function pump() {
     if (next < Number.POSITIVE_INFINITY) scheduleAt(next)
   } finally {
     pumping = false
+    // Anything that asked for a frame mid-pump is owed one now.
+    if (kicked) {
+      kicked = false
+      scheduleAt(0, true)
+    }
   }
 }
 
-/** Runs the loop now, from outside it. */
+/** Runs the loop now, from outside it. Something happened, so no alignment. */
 function kick() {
-  if (pumping) return
-  scheduleAt(0)
+  if (pumping) {
+    kicked = true
+    return
+  }
+  scheduleAt(0, true)
 }
 
 let globalListeners = false
@@ -768,6 +1129,25 @@ function ensureGlobalListeners() {
       attributeFilter: ['class', 'style'],
     })
   }
+
+  // A text selection is painted over the source without touching the DOM, so
+  // no observer sees it and no repaint event fires on the source — and the
+  // engine captures the highlight (see snapdom-engine), so a mirror owes a
+  // frame for it. A source re-captures when the selection touches it, and once
+  // more when the selection leaves, which is what removes the highlight.
+  document.addEventListener('selectionchange', () => {
+    const selection = document.getSelection()
+    let changed = false
+    for (const [element, state] of sources) {
+      const touches = selectionTouches(selection, element)
+      if (touches || state.hadSelection) {
+        state.hadSelection = touches
+        state.dirty = true
+        changed = true
+      }
+    }
+    if (changed) kick()
+  })
 
   // A webfont swapping in restyles text everywhere at once, and nothing about
   // that reaches an observer watching the source.
@@ -809,11 +1189,12 @@ export function subscribeToSource(
     release() {
       subscribers.delete(subscriber)
       if (subscribers.size > 0) return
-      if (timer !== undefined) {
-        window.clearTimeout(timer)
-        timer = undefined
-        wakeAt = Number.POSITIVE_INFINITY
-      }
+      // Both forms of pending wake, not just the timer: a wake already aligned
+      // to an animation frame would otherwise survive the last mirror, and the
+      // moment it holds in `wakeAt` would make the next `scheduleAt` decide it
+      // had nothing sooner to offer and return.
+      unschedule()
+      wakeAt = Number.POSITIVE_INFINITY
       for (const [element, state] of sources) forget(element, state)
     },
   }

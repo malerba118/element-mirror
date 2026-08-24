@@ -19,9 +19,11 @@ import {
   markSlottedSubtree,
   rasterizeIframe,
   getUnscaledDimensions,
-  createCheckboxRadioReplacement
+  createCheckboxRadioReplacement,
+  createRangeReplacement
 } from '../utils/clone.helpers.js'
 import { isFirefox, isSafari } from '../utils/browser.js'
+import { cloneTextWithSelection, inlineTextFieldSelection } from '../modules/selection.js'
 
 // helper implementations moved to ../utils/clone.helpers.js
 
@@ -196,6 +198,12 @@ export async function deepClone(node, sessionCache, options) {
     }
   }
   if (node.nodeType === Node.TEXT_NODE) {
+    // SEL-1: selected text is cloned with its highlight painted in, since the
+    // selection itself is paint state a structural clone cannot carry.
+    if (sessionCache.selection) {
+      const highlighted = cloneTextWithSelection(node, sessionCache.selection)
+      if (highlighted) return highlighted
+    }
     return node.cloneNode(true)
   }
   if (node.nodeType !== Node.ELEMENT_NODE) {
@@ -381,6 +389,43 @@ export async function deepClone(node, sessionCache, options) {
       sessionCache.nodeMap.set(replacement, node)
       applyInputVisual = applyVisual
       clone = replacement
+    } else if (type === 'range' && isFirefox()) {
+      const { el: replacement, applyVisual } = createRangeReplacement(node)
+      sessionCache.nodeMap.set(replacement, node)
+      applyInputVisual = applyVisual
+      clone = replacement
+    } else if (type === 'color' && isSafari()) {
+      // WebKit paints a cloned colour well as a text field showing the hex
+      // value. The value painted as a swatch is closer to the control than
+      // the value spelled out; !important so the styles inlined from the
+      // (natively rendered) source cannot put the text back.
+      const swatch = /** @type {HTMLInputElement} */ (clone)
+      const colorValue = node.value || '#000000'
+      applyInputVisual = () => {
+        swatch.style.setProperty('background-color', colorValue, 'important')
+        swatch.style.setProperty('color', 'transparent', 'important')
+        swatch.style.setProperty('-webkit-text-fill-color', 'transparent', 'important')
+        swatch.style.setProperty('appearance', 'none', 'important')
+        swatch.style.setProperty('-webkit-appearance', 'none', 'important')
+      }
+      swatch.removeAttribute('value')
+    } else if (
+      (type === 'date' || type === 'time' || type === 'datetime-local') &&
+      (isFirefox() || isSafari())
+    ) {
+      // The formatted text of these controls lives in UA shadow content that
+      // neither engine paints inside foreignObject: WebKit shows the raw
+      // machine value, Firefox nothing at all. A text clone carrying the
+      // locale-formatted value reads like the control instead.
+      clone.setAttribute('type', 'text')
+      let shown = node.value
+      if (type === 'date' && node.valueAsDate) {
+        shown = node.valueAsDate.toLocaleDateString(undefined, {
+          timeZone: 'UTC',
+        })
+      }
+      clone.value = shown
+      clone.setAttribute('value', shown)
     } else {
       clone.value = node.value
       clone.setAttribute('value', node.value)
@@ -433,6 +478,19 @@ export async function deepClone(node, sessionCache, options) {
     inlineAllStyles(node, clone, sessionCache, options)
   }
   if (applyInputVisual) { applyInputVisual() }
+  // SEL-1: a text field's selection lives on selectionStart/End rather than in
+  // a document Range, and the field renders its own value, so the highlight is
+  // painted as background layers on the clone instead of wrapped in a span.
+  if (
+    options.captureSelection &&
+    (node instanceof HTMLInputElement || node instanceof HTMLTextAreaElement)
+  ) {
+    try {
+      inlineTextFieldSelection(node, clone)
+    } catch (e) {
+      debugWarn(sessionCache, 'inlineTextFieldSelection failed', e)
+    }
+  }
   // #365: SVG painting elements — CSS rules override presentation attributes but aren't captured
   // via the class-based mechanism (NO_DEFAULTS_TAGS returns '' key). Copy key SVG presentation
   // properties from computed style as inline styles to ensure CSS-driven fills/strokes survive.

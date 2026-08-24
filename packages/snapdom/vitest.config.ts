@@ -3,8 +3,9 @@ import { playwright } from '@vitest/browser-playwright'
 
 // Runs the upstream suites nearest this fork's own changes (PERF-5/6:
 // per-node invalidation, logical-prop trimming, base CSS compression, the
-// toCanvas `canvas` option) in real Chromium — this repo has no jsdom, and
-// the rest of upstream's suite was written for it. `pnpm test` here, or
+// toCanvas `canvas` option) plus the fork's own selection suite (SEL-1) in
+// real Chromium — this repo has no jsdom, and the rest of upstream's suite
+// was written for it. `pnpm test` here, or
 // `pnpm --filter @frostin/snapdom test` from the root.
 export default defineConfig({
   test: {
@@ -13,6 +14,7 @@ export default defineConfig({
       '__tests__/core.clone*.test.js',
       '__tests__/core.cache.test.js',
       '__tests__/module.pseudo*.test.js',
+      '__tests__/module.selection.test.js',
       '__tests__/module.styles*.test.js',
       '__tests__/utils.css*.test.js',
       '__tests__/cssTools.utils.test.js',

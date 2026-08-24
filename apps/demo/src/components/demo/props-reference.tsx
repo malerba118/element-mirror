@@ -1,6 +1,8 @@
+'use client'
+
 import { Card } from '@/components/ui/card'
 
-const PROPS = [
+const CAPTURE = [
   {
     name: 'source',
     type: 'Element | RefObject | string',
@@ -10,10 +12,10 @@ const PROPS = [
   },
   {
     name: 'fps',
-    type: 'number',
-    default: '12',
+    type: 'number | (() => number)',
+    default: '30',
     description:
-      'Maximum captures per second, up to the display refresh rate. Within a shared source, the highest fps sets the capture rate.',
+      'Maximum captures per second, up to the display refresh rate. Within a shared source, the highest fps sets the capture rate. A function is read every cycle, so a rate can rise for the length of an interaction without re-subscribing.',
   },
   {
     name: 'delay',
@@ -29,20 +31,9 @@ const PROPS = [
     description:
       'Bitmap pixels captured per CSS pixel. Lower is cheaper, higher is sharper when displayed large.',
   },
-  {
-    name: 'objectFit',
-    type: 'ObjectFit',
-    default: "'fill'",
-    description:
-      'How the bitmap fits the canvas box once CSS gives the canvas both a width and a height.',
-  },
-  {
-    name: 'objectPosition',
-    type: 'string',
-    default: "'center'",
-    description:
-      'Alignment of the bitmap when objectFit crops or letterboxes it.',
-  },
+]
+
+const PAINT = [
   {
     name: 'background',
     type: 'string | null',
@@ -59,7 +50,19 @@ const PROPS = [
   },
 ]
 
+const PLACEMENT = [
+  {
+    name: 'objectPosition',
+    type: 'string',
+    default: "'center'",
+    description:
+      'Where the source’s box sits when CSS gives the mirror a box of a different ratio. Keywords, percentages and pixels, as in CSS.',
+  },
+]
+
 export function PropsReference() {
+  const props = [...CAPTURE, ...PLACEMENT, ...PAINT]
+
   return (
     <Card className="overflow-x-auto py-0">
       <table className="w-full min-w-2xl border-collapse text-sm">
@@ -72,7 +75,7 @@ export function PropsReference() {
           </tr>
         </thead>
         <tbody>
-          {PROPS.map((prop) => (
+          {props.map((prop) => (
             <tr key={prop.name} className="border-b last:border-0">
               <td className="px-4 py-3 font-mono text-xs whitespace-nowrap">
                 {prop.name}

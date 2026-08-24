@@ -16,6 +16,7 @@ import { lineClampTree } from '../modules/lineClamp.js'
 import { runHook, getGlobalPlugins, normalizePlugin } from './plugins.js'
 import { runPictureResolverBeforeClone } from '../modules/pictureResolver.js'
 import { compressCloneAssets } from '../modules/compress.js'
+import { applyTextFieldSelectionLayers } from '../modules/selection.js'
 import {
   stripRootShadows,
   neutralizeRootMarginCollapse,
@@ -40,6 +41,7 @@ import {
   readIndividualTransforms,
   readTotalTransformMatrix,
   hasBBoxAffectingTransform,
+  measureSubtreeBleed,
 } from '../utils/transforms.helpers.js'
 
 /**
@@ -110,7 +112,7 @@ function checkBurstAdvice(element) {
  * @param {string[]} [options.exclude] - CSS selectors for elements to exclude
  * @param {Function} [options.filter] - Custom filter function
  * @param {boolean} [options.outerTransforms=false] - Normalize root by removing translate/rotate (keep scale/skew)
- * @param {boolean} [options.outerShadows=false] - When false, outer-shadow effects (box/text-shadow, outline, drop-shadow) are stripped from the root and add no bleed. Root blur() always renders and always bleeds.
+ * @param {boolean|'subtree'} [options.outerShadows=false] - When false, outer-shadow effects (box/text-shadow, outline, drop-shadow) are stripped from the root and add no bleed. Root blur() always renders and always bleeds. 'subtree' also widens the capture for outer-shadow ink that DESCENDANTS paint past the root's box — a child's ring against the root's edge — measured per side and bounded by any ancestor that clips.
  * @param {boolean|object} [options.compress] - Downsample inlined raster images to their visible resolution
  * @param {boolean} [options.reconcile=false] - Measure the clone against the live DOM and pin diverging boxes (roughly doubles capture time)
  * @param {boolean} [options.burst=false] - Memoize repeated captures of this element via a scoped MutationObserver (see src/core/burst.js). Without it, snapdom warns once if the same element is captured 3+ times within 2s
@@ -118,6 +120,18 @@ function checkBurstAdvice(element) {
  */
 export async function captureDOM(element, options) {
   if (!element) throw new Error('Element cannot be null or undefined')
+  // Opt-in phase timing for the perf scripts (`.perf/capture-phases.mjs`):
+  // set `globalThis.__SNAPDOM_PHASES__ = []` and every capture pushes
+  // `{ phase, ms }` rows. Costs one falsy check per phase when unset.
+  const phaseLog = globalThis.__SNAPDOM_PHASES__
+  let phaseAt = phaseLog ? performance.now() : 0
+  const phase = phaseLog
+    ? (name) => {
+      const now = performance.now()
+      phaseLog.push({ phase: name, ms: now - phaseAt })
+      phaseAt = now
+    }
+    : null
   applyCachePolicy(options.cache)
   // Fold pending mutations into the per-node style stamps and invalidate the targets of
   // running animations/transitions, so this capture reuses every snapshot it may and none
@@ -161,6 +175,7 @@ export async function captureDOM(element, options) {
 
   // BEFORECLONE
   await runHook('beforeClone', state)
+  if (phase) phase('before-clone')
   const undoClamp = lineClampTree(state.element, preClipRect)
   try {
     // Keep this capture's own clone→source map: nested iframe captures reassign
@@ -189,6 +204,8 @@ export async function captureDOM(element, options) {
   } finally {
     undoClamp()
   }
+
+  if (phase) phase('clone')
 
   // AFTERCLONE
   state = { clone, classCSS, styleCache, nodeMap, ...state }
@@ -230,6 +247,16 @@ export async function captureDOM(element, options) {
     if (options.compress) {
       await runIdle(() => compressCloneAssets(state.clone, state.options, state.nodeMap))
     }
+    // SEL-1: field-selection highlights compose last — the background pass
+    // above rewrites a field's background longhands, and an inlined url()
+    // background has to end up under the highlight.
+    if (options.captureSelection) {
+      try {
+        applyTextFieldSelectionLayers(state.nodeMap)
+      } catch (e) {
+        console.warn('[snapdom] field selection compose failed:', e)
+      }
+    }
   })()
 
   let fontsPhase = Promise.resolve()
@@ -267,6 +294,7 @@ export async function captureDOM(element, options) {
   }
 
   await Promise.all([assetsPhase, fontsPhase])
+  if (phase) phase('assets+fonts')
 
   // PERF-6: the set of tags under an element only changes when nodes are added
   // or removed, and any such mutation bumps the root's own style stamp (its
@@ -307,6 +335,7 @@ export async function captureDOM(element, options) {
   const scrollbarCSS = collectScrollbarCSS(state.element?.ownerDocument || document)
   state = { fontsCSS, baseCSS, scrollbarCSS, ...state }
   await runHook('beforeRender', state)
+  if (phase) phase('base-css')
 
   await new Promise((resolve) => {
     idle(() => {
@@ -500,6 +529,17 @@ export async function captureDOM(element, options) {
       const bleedOutline = parseOutline(csEl)
       const drop = parseFilterDropShadows(csEl)
 
+      // What a child paints past the root's box: measured on the page, so the
+      // ratio between the bbox and the box it was drawn as says how many root
+      // pixels a page pixel is worth. The bbox already carries the root's own
+      // transform, so what is left in the ratio is what an ancestor did — and a
+      // rotation, which stretches both boxes alike, correctly comes out as one.
+      const perX = rect.width > 0 ? (maxX - minX) / rect.width : 1
+      const perY = rect.height > 0 ? (maxY - minY) / rect.height : 1
+      const subtree = options.outerShadows === 'subtree' && !clipWindow
+        ? measureSubtreeBleed(state.element, nodeMap, styleCache, perX, perY)
+        : { top: 0, right: 0, bottom: 0, left: 0 }
+
       // A region capture defines its own exact edges — never expand it for root bleed.
       // blur() is not an outer-shadow effect: the root keeps it, so its bleed is
       // always included; shadows/outline/drop-shadow only under outerShadows.
@@ -507,12 +547,18 @@ export async function captureDOM(element, options) {
         ? { top: 0, right: 0, bottom: 0, left: 0 }
         : outerShadows
           ? {
-            top: limitDecimals(Math.max(bleedShadow.top, bleedText.top) + bleedBlur.top + bleedOutline.top + drop.bleed.top),
-            right: limitDecimals(Math.max(bleedShadow.right, bleedText.right) + bleedBlur.right + bleedOutline.right + drop.bleed.right),
-            bottom: limitDecimals(Math.max(bleedShadow.bottom, bleedText.bottom) + bleedBlur.bottom + bleedOutline.bottom + drop.bleed.bottom),
-            left: limitDecimals(Math.max(bleedShadow.left, bleedText.left) + bleedBlur.left + bleedOutline.left + drop.bleed.left)
+            top: limitDecimals(Math.max(bleedShadow.top, bleedText.top, subtree.top) + bleedBlur.top + bleedOutline.top + drop.bleed.top),
+            right: limitDecimals(Math.max(bleedShadow.right, bleedText.right, subtree.right) + bleedBlur.right + bleedOutline.right + drop.bleed.right),
+            bottom: limitDecimals(Math.max(bleedShadow.bottom, bleedText.bottom, subtree.bottom) + bleedBlur.bottom + bleedOutline.bottom + drop.bleed.bottom),
+            left: limitDecimals(Math.max(bleedShadow.left, bleedText.left, subtree.left) + bleedBlur.left + bleedOutline.left + drop.bleed.left)
           }
           : { top: bleedBlur.top, right: bleedBlur.right, bottom: bleedBlur.bottom, left: bleedBlur.left }
+
+      // The element's own painted box, before anything was added around it.
+      const boxX0 = minX
+      const boxY0 = minY
+      const boxW0 = limitDecimals(maxX - minX)
+      const boxH0 = limitDecimals(maxY - minY)
 
       minX = limitDecimals(minX - bleed.left)
       minY = limitDecimals(minY - bleed.top)
@@ -596,7 +642,29 @@ export async function captureDOM(element, options) {
       const foString = serializer.serializeToString(fo)
       const wantsSize = hasW || hasH
 
-      options.meta = { w0: baseW, h0: baseH, vbW, vbH, targetW: w, targetH: h }
+      // Where the raster sits relative to the element, in element pixels.
+      // Anything that widened the region — a rotated bbox, a shadow, a child's
+      // ring, the pad — moved the content in, and not necessarily by the same
+      // amount on each side, so a caller laying the raster back over the live
+      // element cannot work this out from the size. originX/originY place the
+      // raster's own top-left; boxX/boxY/boxW/boxH are where the element's
+      // painted box landed within it.
+      const originX = limitDecimals(minX - pad)
+      const originY = limitDecimals(minY - pad)
+      options.meta = {
+        w0: baseW,
+        h0: baseH,
+        vbW,
+        vbH,
+        originX,
+        originY,
+        boxX: limitDecimals(boxX0 - originX),
+        boxY: limitDecimals(boxY0 - originY),
+        boxW: boxW0,
+        boxH: boxH0,
+        targetW: w,
+        targetH: h
+      }
 
       const svgOutW = (!wantsSize || isSafari())
         ? vbW
@@ -616,6 +684,7 @@ export async function captureDOM(element, options) {
   })
   // afterRender(context)
   await runHook('afterRender', state)
+  if (phase) phase('serialize')
 
   const sandbox = document.getElementById('snapdom-sandbox')
   if (sandbox && sandbox.style.position === 'absolute') sandbox.remove()

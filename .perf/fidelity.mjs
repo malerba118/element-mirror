@@ -20,6 +20,7 @@ import { compare, decodePng } from './pixels.mjs'
  *
  *   node .perf/fidelity.mjs                     rank every specimen
  *   node .perf/fidelity.mjs --shot masks tabs   save those pairs as PNGs
+ *   MIRROR_VERSION=1 node .perf/fidelity.mjs    rank the other implementation
  *
  * Needs the dev server up: `pnpm dev`.
  */
@@ -74,8 +75,16 @@ for (const name of subjects) {
     const source = decodePng(
       await figure.locator('[data-specimen-source]').screenshot()
     )
+    // The mirror's box, which is what a source's box compares against. Version
+    // 2 paints outside that box on purpose, so its canvas is larger than the
+    // thing being measured and the wrapper is what to shoot; version 1 has no
+    // wrapper and its canvas is its box.
+    const box = figure.locator('[data-element-mirror]')
     const mirror = decodePng(
-      await figure.locator('canvas[data-element-mirror-ignore]').screenshot()
+      await ((await box.count()) > 0
+        ? box
+        : figure.locator('canvas[data-element-mirror-ignore]')
+      ).screenshot()
     )
     results.push({ name, ...compare(source, mirror, DIFFERENT_ENOUGH) })
   } catch (error) {

@@ -13,7 +13,8 @@ Forked from:
 - Upstream path `src/`
 
 `LICENSE`, `README.upstream.md`, `CHANGELOG.md`, `types/`,
-`esbuild.config.mjs` and the test suite are upstream's, kept as they were.
+`esbuild.config.mjs` and the test suite are upstream's, kept as they were
+except where a fork option needed declaring (`captureSelection`, SEL-1 below).
 `src/index.d.ts` is ours: it points TypeScript at upstream's types for deep
 imports. The published `@zumer/snapdom` is still a dependency of the `.perf`
 harness, which loads it as the unforked baseline — that is what
@@ -68,12 +69,57 @@ actually receives.
 - **The used-tag walk is memoized per capture root** (`src/core/capture.js`,
   PERF-6), validated by the root's style stamp, since the tag set only changes
   when nodes are added or removed and any such mutation stamps the root.
+- **`outerShadows: 'subtree'` widens the capture by what DESCENDANTS paint
+  outside the root's box** (`measureSubtreeBleed` in
+  `src/utils/transforms.helpers.js`, used by `src/core/capture.js`). A capture is
+  the root's box, so a ring or a shadow drawn against the root's edge — a card
+  whose own `ring-1` is a `box-shadow` on the card, mirrored from a wrapper
+  around it — was cloned and then clipped away by the viewBox, and the mirror
+  lost an edge its source has. The walk only measures elements that carry an
+  outer effect (four string reads decide), reuses the styles the clone pass
+  already read, and honours ancestors that clip: a shadow inside
+  `overflow: hidden` never escapes it, which is also what keeps a scrolled
+  container's offscreen rows from widening anything. Bleed is per side, so
+  nothing is padded on the chance that something overhangs.
+- **A capture reports its own geometry** (`result.meta`, `src/api/snapdom.js`).
+  `originX`/`originY` place the raster's top-left relative to the element's own,
+  and `boxX`/`boxY`/`boxW`/`boxH` say where the element's painted box landed
+  inside it. Everything that widens a region — a rotated bbox, a shadow, a
+  descendant's ring, the pad — does so unevenly, and a caller drawing the raster
+  back over the live element cannot work that out from the size. `ElementMirror`
+  places every frame by these; `.perf/bleed.mjs` measures the result against the
+  source it came from.
 - **The computed declaration's length is read once per element rather than once
   per property.** A live `CSSStyleDeclaration` answers `length` by going back
   into style, and the property loop asked on every iteration: about fifteen
   thousand round trips a capture on a card of fifty nodes. Worth a few tenths of
   a millisecond, no more, since the work per property is much larger than the
   read.
+- **`captureSelection: true` renders the user's live text selection into the
+  capture** (`src/modules/selection.js`, SEL-1). A selection is paint without
+  DOM — the browser draws the highlight and restyles the selected glyphs at
+  paint time — so a structural clone loses it. The clone pass wraps each
+  selected run of text in a `<span>` carrying the styles the browser painted it
+  with: the authored `::selection` color, background, text-shadow and
+  text-decoration where a rule matches (detected by diffing the pseudo's
+  computed style against the element's own), the UA's `Highlight` system color
+  where none does, and nothing at all over `user-select: none`. A selection
+  inside `<input>`/`<textarea>` is different again — it lives on the field's
+  `selectionStart`/`End` rather than in a Range, and the field renders its own
+  value, so there is nothing to wrap. That highlight is painted as background
+  layers on the field's clone instead (a background paints behind the value,
+  which is where the browser draws it), one layer per line box, with the run's
+  rectangles measured from a hidden twin that lays the value out in the field's
+  own text styles — and only while the field is focused, since the browser
+  keeps an unfocused field's selection but paints no highlight for it. Opt-in,
+  and off by default like upstream. Shadow-root selections are not exposed on
+  the document's Selection, so they are not rendered; a field's `::selection`
+  color cannot recolor a value the field paints itself, so only the highlight
+  behind it is; and the selection API only exists on text/search/url/tel/
+  password inputs, so an email or number input paints a highlight the platform
+  refuses to report (`selectionStart` is null even mid-selection) and nothing
+  can be rendered for it. `types/snapdom.d.ts` gains the option's declaration
+  — the one edit to upstream's types.
 
 ## Where its time goes
 

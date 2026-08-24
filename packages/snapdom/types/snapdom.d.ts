@@ -114,8 +114,27 @@ export interface SnapdomOptions {
    * Expand root bbox for shadows/blur/outline instead of stripping them from the
    * cloned root. Default false (root shadows/outline are stripped, blur bleed is
    * still included).
+   *
+   * `'subtree'` does that and also widens the capture for outer-shadow ink that
+   * descendants paint past the root's box — a child's ring flush against the
+   * root's edge, a card's shadow inside a wrapper — measured per side and
+   * bounded by any ancestor that clips its content.
    */
-  outerShadows?: boolean;
+  outerShadows?: boolean | "subtree";
+
+  /**
+   * Render the user's live text selection into the capture (fork addition,
+   * SEL-1 in FORK.md): selected runs of text are wrapped in the styles the
+   * browser paints them with — authored `::selection` color, background,
+   * text-shadow and text-decoration where a rule matches, the UA highlight
+   * color where none does. A focused <input>/<textarea>'s selection is
+   * painted too, as highlight layers behind the value — for the input types
+   * that expose the selection API (text, search, url, tel, password); an
+   * email or number input paints a highlight the platform refuses to report,
+   * so nothing can be rendered for it. Selections inside shadow roots are not
+   * rendered. Default false.
+   */
+  captureSelection?: boolean;
 
   /**
    * Capture only a region instead of the full element: `'viewport'` (what the user
@@ -301,9 +320,42 @@ export interface BlobOptions {
   height?: number;
 }
 
+export interface CaptureMeta {
+  /** The element's own box, before anything widened the region. */
+  w0: number;
+  h0: number;
+  /** The rasterized region, in element pixels. */
+  vbW: number;
+  vbH: number;
+  /**
+   * Where the region's top-left sits relative to the element's own, in element
+   * pixels and usually negative or zero: whatever widened the capture — a
+   * rotated bbox, a shadow, a descendant's ring, the pad — moved the content in
+   * by this much, and not necessarily by the same amount on each side. Needed to
+   * lay the raster back over the live element.
+   */
+  originX: number;
+  originY: number;
+  /**
+   * The element's painted box within the region, offset from the region's own
+   * top-left. `boxX`/`boxY` are zero and `boxW`/`boxH` are the element's box
+   * when nothing widened the capture.
+   */
+  boxX: number;
+  boxY: number;
+  boxW: number;
+  boxH: number;
+  /** The requested output size, when width/height were given. */
+  targetW: number;
+  targetH: number;
+}
+
 export interface CaptureResult {
   /** Canonical data URL of the SVG snapshot (when available). */
   url: string;
+
+  /** What the capture settled on geometrically. */
+  meta?: CaptureMeta;
 
   /** Returns the raw SVG data URL (same as `url`). */
   toRaw(): string;

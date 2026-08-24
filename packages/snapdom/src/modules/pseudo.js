@@ -22,7 +22,7 @@ import {
   hasCounters
 } from '../modules/counter.js'
 import { snapFetch } from './snapFetch.js'
-import { currentStyleEpoch, nodeStyleStamp, snapshotIsCurrent } from './styles.js'
+import { currentStyleEpoch, jitteredWriteTime, nodeStyleStamp, snapshotIsCurrent } from './styles.js'
 
 /** Weak memo for per-document preflight results keyed by a cheap style fingerprint */
 const __preflightMemo = new WeakMap()
@@ -475,8 +475,10 @@ export async function inlinePseudoElements(source, clone, sessionCache, options)
   // propagation, or failure disqualifies it. The verdict is stamped with entry-time
   // validity, so an invalidation racing the pass makes the stored verdict miss, not lie.
   let cacheable = !skipOwn
+  // Backdated by jitteredWriteTime (PERF-6) so all verdicts written by one capture don't
+  // expire together in a single later capture.
   const entry = cacheable
-    ? { epoch: currentStyleEpoch(), stamp: nodeStyleStamp(source), at: performance.now() }
+    ? { epoch: currentStyleEpoch(), stamp: nodeStyleStamp(source), at: jitteredWriteTime() }
     : null
 
   // Sibling-counter overrides are per-capture state: they live on sessionCache (whose
